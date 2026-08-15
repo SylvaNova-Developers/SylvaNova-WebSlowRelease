@@ -263,7 +263,21 @@ class SlowReleaseContext(TrackerGameContext):
                 if goal_location is None:
                     await asyncio.sleep(1)
                     continue
-                await asyncio.sleep(random.uniform(self.time_per_min, self.time_per_max))
+                check_delay = random.uniform(self.time_per_min, self.time_per_max)
+                deadline = asyncio.get_running_loop().time() + check_delay
+                while not self._stop_requested:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        await asyncio.wait_for(wakeup.wait(), timeout=remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    else:
+                        wakeup.clear()
+                        if self.auto_goal_on_go_mode and self._is_in_go_mode():
+                            await self._mark_completed("Go mode detected; sending goal.")
+                            return
                 if self._stop_requested:
                     return
                 await self.check_locations([goal_location])
