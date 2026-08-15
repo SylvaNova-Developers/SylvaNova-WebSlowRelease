@@ -2,9 +2,9 @@
 
 ## Required steps
 
-- Download both [Universal Tracker](https://github.com/FarisTheAncient/Archipelago/tree/tracker) (download link under "Releases" at the right of the page) and [Slow Release Client](https://github.com/gjgfuj/AP-SlowRelease/releases) apworlds.
-- Double click the apworlds to install them, or move them manually in your `Archipelago/custom_worlds` folder.
-- To slow release a particular slot, you need that slot's yaml file in your `Archipelago/Players` folder.
+- For the **Slow Release Web Manager**, Universal Tracker is already vendored under `worlds/tracker/` (no separate install).
+- For the classic Launcher client, install [Universal Tracker](https://github.com/FarisTheAncient/Archipelago/releases) and/or [Slow Release Client](https://github.com/gjgfuj/AP-SlowRelease/releases) apworlds into `Archipelago/custom_worlds` if they are not already present in this tree.
+- To slow release a particular slot, you need that slot's yaml file available (Players folder for the desktop client, or paste/upload YAML in the web UI).
 
 ## Using the Slow Release Client
 

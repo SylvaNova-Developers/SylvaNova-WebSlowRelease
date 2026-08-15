@@ -76,9 +76,12 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
     time_max = float(raw["time_max"])
     region_mode = bool(raw["region_mode"])
 
-    # Force headless CommonClient (no Kivy).
+    # Force headless CommonClient (no Kivy) and settings (no tkinter).
     if "--nogui" not in sys.argv:
         sys.argv.append("--nogui")
+    import settings as ap_settings
+
+    ap_settings.no_gui = True
 
     from slowrelease_web.models import utc_now_iso
     from worlds.slowrelease.Client import run_headless
@@ -102,6 +105,7 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
             region_mode=region_mode,
             progress_callback=writer.handle,
             stop_event=stop_event,
+            players_dir=str(players_dir),
         )
         if ctx._completed:
             db.append_log(slot_id, "Slot completed successfully.")

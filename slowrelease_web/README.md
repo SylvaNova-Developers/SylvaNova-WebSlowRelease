@@ -14,18 +14,19 @@ Standalone web app that runs many [Slow Release](../worlds/slowrelease/) slots i
 ## Requirements
 
 - Python 3.11–3.13 with this Archipelago tree
-- **Universal Tracker** apworld installed (`custom_worlds` / user worlds) so `worlds.tracker` imports
-- Node.js 20+ (to build the UI once)
+- Node.js 20+ (only if you need to rebuild the UI)
+
+**Universal Tracker is bundled** under [`worlds/tracker/`](../worlds/tracker/) (vendored from [Tracker_v0.3.3](https://github.com/FarisTheAncient/Archipelago/releases/tag/Tracker_v0.3.3)). No separate apworld install is required for the web manager.
 
 ## Setup
 
 ```bash
 # From the Archipelago repo root
+pip install -r requirements.txt
 pip install -r slowrelease_web/requirements.txt
-cd slowrelease_web/ui && npm install && npm run build && cd ../..
+# Optional UI rebuild:
+# cd slowrelease_web/ui && npm install && npm run build && cd ../..
 ```
-
-Install [Universal Tracker](https://github.com/FarisTheAncient/Archipelago/releases) into your Archipelago `custom_worlds` folder (same as the desktop Slow Release client).
 
 ## Run
 

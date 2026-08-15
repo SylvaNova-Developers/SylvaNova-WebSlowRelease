@@ -81,19 +81,18 @@ def main() -> None:
             assert patched.json()["time_min"] == 8
             print("patched ok")
 
-            if body.get("tracker_available"):
-                started = client.post(f"/api/slots/{slot_id}/start")
-                assert started.status_code == 200, started.text
-                print("start requested; status=", started.json()["status"])
-                stopped = client.post(f"/api/slots/{slot_id}/stop")
-                assert stopped.status_code == 200, stopped.text
-                assert stopped.json()["desired_state"] == "stopped"
-                print("stopped ok")
-            else:
-                errored = client.post(f"/api/slots/{slot_id}/start")
-                assert errored.status_code == 200, errored.text
-                assert errored.json()["status"] == "error"
-                print("start correctly refused without Universal Tracker")
+            assert body.get("tracker_available"), "Universal Tracker should be bundled under worlds/tracker"
+            started = client.post(f"/api/slots/{slot_id}/start")
+            assert started.status_code == 200, started.text
+            print("start requested; status=", started.json()["status"])
+            # Give the worker a moment to spawn (may error connecting without a live room).
+            import time
+
+            time.sleep(2)
+            stopped = client.post(f"/api/slots/{slot_id}/stop")
+            assert stopped.status_code == 200, stopped.text
+            assert stopped.json()["desired_state"] == "stopped"
+            print("stopped ok")
 
             deleted = client.delete(f"/api/slots/{slot_id}")
             assert deleted.status_code == 204, deleted.text

@@ -243,8 +243,24 @@ async def run_headless(
     region_mode: bool = True,
     progress_callback: ProgressCallback | None = None,
     stop_event: asyncio.Event | None = None,
+    players_dir: str | None = None,
 ) -> SlowReleaseContext:
     """Run Slow Release without GUI/CLI until completion, stop, or fatal error."""
+    import settings
+
+    settings.no_gui = True
+    if players_dir:
+        players_path = settings.GeneratorOptions.PlayerFilesPath(players_dir)
+        settings.get_settings().generator.player_files_path = players_path
+        try:
+            from worlds.tracker import TrackerWorld
+
+            TrackerWorld.settings["player_files_path"] = (
+                TrackerWorld.settings.__class__.TrackerPlayersPath(players_dir)
+            )
+        except Exception:
+            logger.exception("Failed to set Universal Tracker player_files_path")
+
     ctx = SlowReleaseContext(connect, password)
     ctx.auth = name
     ctx.region_mode = region_mode
@@ -254,7 +270,12 @@ async def run_headless(
 
     if tracker_loaded:
         ctx.tracker_core.enforce_deferred_connections = DeferredEntranceMode.disabled
-        ctx.run_generator()
+        if players_dir:
+            ctx.tracker_core.player_folder_override = players_dir
+        # Use super_override for the Players path; do not pass override_yaml_path
+        # (that branch is for reconnect regen and requires self.game).
+        ctx.tracker_core.run_generator(None, None, players_dir)
+        ctx.use_split = getattr(ctx.tracker_core, "use_split", True)
 
     ctx.server_task = asyncio.create_task(server_loop(ctx), name="server loop")
 
