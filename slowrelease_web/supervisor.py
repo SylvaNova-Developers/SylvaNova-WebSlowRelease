@@ -159,6 +159,9 @@ class Supervisor:
         env["PYTHONPATH"] = os.pathsep.join(
             [str(REPO_ROOT), env.get("PYTHONPATH", "")]
         ).rstrip(os.pathsep)
+        # Workers are headless subprocesses (not a TTY). Skip ModuleUpdate's
+        # interactive prompts; deps must already be installed in this env.
+        env["SKIP_REQUIREMENTS_UPDATE"] = "1"
         # Headless
         cmd = [
             self.python_executable,
