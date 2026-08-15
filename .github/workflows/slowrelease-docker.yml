@@ -69,7 +69,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/slowrelease-v') }}
             type=raw,value=${{ steps.version.outputs.version }},enable=${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
             type=ref,event=branch,enable=${{ github.ref_type == 'branch' }}
             type=sha,prefix=sha-
