@@ -382,21 +382,23 @@ class SlowReleaseContext(TrackerGameContext):
                     self._in_bk = True
                     self._emit_progress({"status": "bk"})
                 # Sleep until items/room updates wake us, or poll again after 1s.
+                # Clear AFTER wait so a wakeup.set() between updateTracker and
+                # wait is not lost (clear-before-wait raced with ReceivedItems).
                 # #region agent log
-                was_set_before_clear = wakeup.is_set()
-                if was_set_before_clear:
+                was_set_before_wait = wakeup.is_set()
+                if was_set_before_wait:
                     _agent_log(
                         "H3",
                         "Client.py:autoplayer",
-                        "bk_wait_clear_lost_wakeup",
+                        "bk_wait_already_signaled",
                         {
                             "auth": getattr(self, "auth", None),
-                            "was_set_before_clear": True,
+                            "was_set_before_wait": True,
                             "available": len(self.tracker_core.locations_available),
+                            "runId": "post-fix",
                         },
                     )
                 # #endregion
-                wakeup.clear()
                 try:
                     await asyncio.wait_for(wakeup.wait(), timeout=1.0)
                     # #region agent log
@@ -408,11 +410,13 @@ class SlowReleaseContext(TrackerGameContext):
                             "auth": getattr(self, "auth", None),
                             "available": len(self.tracker_core.locations_available),
                             "items_received_len": len(getattr(self, "items_received", []) or []),
+                            "runId": "post-fix",
                         },
                     )
                     # #endregion
                 except asyncio.TimeoutError:
                     pass
+                wakeup.clear()
 
     def make_gui(self):
         ui = super().make_gui()
@@ -505,8 +509,77 @@ class SlowReleaseContext(TrackerGameContext):
                     "wakeup_set": bool(
                         self._logic_wakeup is not None and self._logic_wakeup.is_set()
                     ),
+                    "runId": "post-fix",
                 },
             )
+            # Yacht Dice: explain avail=0 (score logic vs missing location coverage).
+            if getattr(self, "game", None) == "Yacht Dice" and self.tracker_core.multiworld:
+                try:
+                    world = self.tracker_core.multiworld.worlds[self.tracker_core.player_id]
+                    missing = list(self.missing_locations or [])
+                    world_loc_ids = {
+                        loc.address
+                        for loc in self.tracker_core.multiworld.get_locations(
+                            self.tracker_core.player_id
+                        )
+                        if loc.address is not None
+                    }
+                    missing_in_world = sum(1 for mid in missing if mid in world_loc_ids)
+                    missing_scores = sorted(
+                        (mid - 16871244500) for mid in missing if mid in world_loc_ids
+                    )[:8]
+                    max_score = None
+                    try:
+                        from worlds.yachtdice.Rules import dice_simulation_state_change
+
+                        # Force refresh of cached score on a fresh state via updateTracker result
+                        st = None
+                        try:
+                            st = self.updateTracker().state
+                        except Exception:
+                            st = None
+                        if st is not None:
+                            max_score = dice_simulation_state_change(
+                                st,
+                                self.tracker_core.player_id,
+                                getattr(world, "frags_per_dice", 4),
+                                getattr(world, "frags_per_roll", 4),
+                                getattr(world, "possible_categories", []),
+                                getattr(world, "difficulty", 2),
+                            )
+                    except Exception as score_exc:
+                        max_score = f"err:{score_exc}"
+                    _agent_log(
+                        "H7",
+                        "Client.py:on_package",
+                        "yacht_dice_logic_snapshot",
+                        {
+                            "auth": getattr(self, "auth", None),
+                            "frags_per_dice": getattr(world, "frags_per_dice", None),
+                            "frags_per_roll": getattr(world, "frags_per_roll", None),
+                            "difficulty": getattr(world, "difficulty", None),
+                            "goal_score": getattr(world, "goal_score", None),
+                            "max_score_opt": getattr(world, "max_score", None),
+                            "categories_len": len(getattr(world, "possible_categories", []) or []),
+                            "world_location_count": len(world_loc_ids),
+                            "missing_count": len(missing),
+                            "missing_in_world": missing_in_world,
+                            "missing_not_in_world": len(missing) - missing_in_world,
+                            "missing_scores_sample": missing_scores,
+                            "max_achievable_score": max_score,
+                            "avail_after": avail_after,
+                            "dice_fragment_count": dice_frag_count,
+                            "dice_count": dice_count,
+                            "runId": "post-fix",
+                        },
+                    )
+                except Exception as yacht_exc:
+                    _agent_log(
+                        "H7",
+                        "Client.py:on_package",
+                        "yacht_dice_logic_snapshot_err",
+                        {"auth": getattr(self, "auth", None), "error": str(yacht_exc)},
+                    )
             # #endregion
             self._wake_logic()
         elif cmd == "Connected":

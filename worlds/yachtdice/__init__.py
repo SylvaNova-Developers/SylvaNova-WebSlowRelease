@@ -1,12 +1,12 @@
 import math
-from typing import Dict
+from typing import Any, Dict
 
 from BaseClasses import CollectionState, Entrance, Item, ItemClassification, Location, Region, Tutorial
 
 from worlds.AutoWorld import WebWorld, World
 
 from .Items import YachtDiceItem, item_groups, item_table
-from .Locations import YachtDiceLocation, all_locations, ini_locations
+from .Locations import LocData, YachtDiceLocation, all_locations, ini_locations
 from .Options import (
     AddExtraPoints,
     AddStoryChapters,
@@ -57,6 +57,9 @@ class YachtDiceWorld(World):
     item_name_groups = item_groups
 
     ap_world_version = "2.1.4"
+    # Universal Tracker: allow solo regen from Connected slot_data (location IDs
+    # encode scores; seed-local ini_locations otherwise miss server checks).
+    ut_can_gen_without_yaml = True
 
     def _get_yachtdice_data(self):
         return {
@@ -66,6 +69,36 @@ class YachtDiceWorld(World):
             "player_id": self.player,
             "race": self.multiworld.is_race,
         }
+
+    @staticmethod
+    def interpret_slot_data(slot_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Trigger UT re-gen and pass server slot_data via re_gen_passthrough."""
+        return slot_data
+
+    def _apply_slot_data(self, slot_data: Dict[str, Any]) -> None:
+        """Overlay Connected slot_data so UT rules match the live multiworld."""
+        if "number_of_dice_fragments_per_dice" in slot_data:
+            self.frags_per_dice = int(slot_data["number_of_dice_fragments_per_dice"])
+        if "number_of_roll_fragments_per_roll" in slot_data:
+            self.frags_per_roll = int(slot_data["number_of_roll_fragments_per_roll"])
+        if "allowed_categories" in slot_data and slot_data["allowed_categories"]:
+            self.possible_categories = list(slot_data["allowed_categories"])
+        if "goal_score" in slot_data:
+            self.goal_score = int(slot_data["goal_score"])
+        if "last_check_score" in slot_data:
+            self.max_score = int(slot_data["last_check_score"])
+        if "game_difficulty" in slot_data:
+            diff = slot_data["game_difficulty"]
+            if isinstance(diff, str):
+                name_to_val = {
+                    "easy": 1,
+                    "medium": 2,
+                    "hard": 3,
+                    "extreme": 4,
+                }
+                self.difficulty = name_to_val.get(diff, self.difficulty)
+            else:
+                self.difficulty = int(diff)
 
     def generate_early(self):
         """
@@ -423,6 +456,16 @@ class YachtDiceWorld(World):
                 f"{already_items} {self.number_of_locations}."
             )
 
+        # Universal Tracker re-gen: apply Connected slot_data so frags/difficulty/
+        # categories/goal match the live room (YAML-only gen uses a different seed).
+        # Do not rewrite itempool/precollected — UT strips coded start items and
+        # evaluates inventory from ReceivedItems.
+        if (
+            getattr(self.multiworld, "re_gen_passthrough", None)
+            and self.game in self.multiworld.re_gen_passthrough
+        ):
+            self._apply_slot_data(self.multiworld.re_gen_passthrough[self.game])
+
         # add precollected items using push_precollected. Items in self.itempool get created in create_items
         for item in self.precollected:
             self.multiworld.push_precollected(self.create_item(item))
@@ -435,15 +478,35 @@ class YachtDiceWorld(World):
         self.multiworld.itempool += [self.create_item(name) for name in self.itempool]
 
     def create_regions(self):
-        # call the ini_locations function, that generates locations based on the inputs.
-        location_table = ini_locations(
-            self.goal_score,
-            self.max_score,
-            self.number_of_locations,
-            self.difficulty,
-            self.skip_early_locations,
-            self.multiworld.players,
-        )
+        # Universal Tracker: location IDs are starting_index+score. Seed-local
+        # ini_locations() produces a different score set than the live room, so
+        # create every score location and let UT filter via missing_locations.
+        if getattr(self.multiworld, "generation_is_fake", False):
+            max_score = int(getattr(self, "max_score", 1000) or 1000)
+            location_table = {
+                name: data
+                for name, data in all_locations.items()
+                if data.score <= max_score
+            }
+            # Ensure goal score exists even if max_score was applied oddly.
+            goal = int(getattr(self, "goal_score", max_score) or max_score)
+            goal_name = f"{goal} score"
+            if goal_name not in location_table:
+                location_table[goal_name] = LocData(
+                    all_locations[goal_name].id if goal_name in all_locations else (16871244500 + goal),
+                    "Board",
+                    goal,
+                )
+        else:
+            # call the ini_locations function, that generates locations based on the inputs.
+            location_table = ini_locations(
+                self.goal_score,
+                self.max_score,
+                self.number_of_locations,
+                self.difficulty,
+                self.skip_early_locations,
+                self.multiworld.players,
+            )
 
         # simple menu-board construction
         menu = Region("Menu", self.player, self.multiworld)
