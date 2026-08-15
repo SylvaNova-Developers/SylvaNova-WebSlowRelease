@@ -34,6 +34,7 @@ def _prepare_players_dir(slot_id: int, yaml_text: str, slot_name: str) -> Path:
 def _configure_player_files_path(players_dir: Path) -> None:
     import settings
 
+    settings.skip_autosave = True
     settings.get_settings().generator.player_files_path = (
         settings.GeneratorOptions.PlayerFilesPath(str(players_dir))
     )

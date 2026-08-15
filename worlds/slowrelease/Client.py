@@ -250,6 +250,7 @@ async def run_headless(
 
     settings.no_gui = True
     if players_dir:
+        settings.skip_autosave = True
         players_path = settings.GeneratorOptions.PlayerFilesPath(players_dir)
         settings.get_settings().generator.player_files_path = players_path
         try:
