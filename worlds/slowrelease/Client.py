@@ -337,6 +337,7 @@ async def run_headless(
     progress_callback: ProgressCallback | None = None,
     stop_event: asyncio.Event | None = None,
     players_dir: str | None = None,
+    on_ready: typing.Callable[[SlowReleaseContext], None] | None = None,
 ) -> SlowReleaseContext:
     """Run Slow Release without GUI/CLI until completion, stop, or fatal error."""
     import settings
@@ -361,6 +362,8 @@ async def run_headless(
     ctx.progress_callback = progress_callback
     ctx.set_time(time_min, time_max)
     ctx._emit_progress({"status": "connecting"})
+    if on_ready is not None:
+        on_ready(ctx)
 
     if tracker_loaded:
         ctx.tracker_core.enforce_deferred_connections = DeferredEntranceMode.disabled

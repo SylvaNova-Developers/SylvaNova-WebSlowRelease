@@ -171,14 +171,15 @@ def create_app(
                 raise HTTPException(400, "time_max must be >= time_min")
         updated = db.update_slot(slot_id, **fields)
         assert updated is not None
-        # Live timing/region/go-mode changes require restart to apply cleanly.
-        if any(k in fields for k in ("time_min", "time_max", "region_mode", "auto_goal_on_go_mode")):
-            raw = db.get_slot_raw(slot_id)
-            if raw and raw["desired_state"] == "running":
-                db.append_log(slot_id, "Settings changed; restarting worker to apply.")
-                await supervisor.restart_slot(slot_id)
-        else:
-            on_change()
+        # Timing / region / auto-goal are applied live by the worker settings sync.
+        # No restart required for those fields.
+        on_change()
+        if any(k in fields for k in ("time_min", "time_max")):
+            db.append_log(
+                slot_id,
+                f"Timing set to {updated.time_min:g}–{updated.time_max:g}s "
+                "(applies live within a couple seconds if running).",
+            )
         return db.get_slot(slot_id)  # type: ignore
 
     @app.post("/api/slots/{slot_id}/start", response_model=SlotOut)

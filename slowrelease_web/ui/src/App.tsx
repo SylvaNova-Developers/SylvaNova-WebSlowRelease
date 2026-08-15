@@ -40,6 +40,8 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [detail, setDetail] = useState<SlotDetail | null>(null)
   const [showForm, setShowForm] = useState(true)
+  const [editTimeMin, setEditTimeMin] = useState(10)
+  const [editTimeMax, setEditTimeMax] = useState(10)
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined)
@@ -68,6 +70,12 @@ export default function App() {
       window.clearInterval(id)
     }
   }, [selectedId, slots])
+
+  useEffect(() => {
+    if (!detail) return
+    setEditTimeMin(detail.time_min)
+    setEditTimeMax(detail.time_max)
+  }, [detail?.id, detail?.time_min, detail?.time_max])
 
   const running = useMemo(
     () => slots.filter((s) => s.desired_state === 'running' && s.status !== 'completed').length,
@@ -119,6 +127,25 @@ export default function App() {
     setError('')
     try {
       const updated = await api.patchSlot(id, { auto_goal_on_go_mode: enabled })
+      setSlots(await api.listSlots())
+      if (selectedId === id) {
+        setDetail((prev) => (prev ? { ...prev, ...updated, logs: prev.logs } : prev))
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function applyTiming(id: number) {
+    setError('')
+    const timeMin = Number(editTimeMin)
+    const timeMax = Number(editTimeMax)
+    if (!(timeMin > 0) || !(timeMax > 0) || timeMax < timeMin) {
+      setError('Time max must be >= time min, and both must be > 0.')
+      return
+    }
+    try {
+      const updated = await api.patchSlot(id, { time_min: timeMin, time_max: timeMax })
       setSlots(await api.listSlots())
       if (selectedId === id) {
         setDetail((prev) => (prev ? { ...prev, ...updated, logs: prev.logs } : prev))
@@ -368,8 +395,30 @@ export default function App() {
             </div>
             <div>
               <dt>Timing</dt>
-              <dd>
-                {detail.time_min}–{detail.time_max}s · region {detail.region_mode ? 'on' : 'off'}
+              <dd className="timing-edit">
+                <label>
+                  Min
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    value={editTimeMin}
+                    onChange={(e) => setEditTimeMin(Number(e.target.value))}
+                  />
+                </label>
+                <label>
+                  Max
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    value={editTimeMax}
+                    onChange={(e) => setEditTimeMax(Number(e.target.value))}
+                  />
+                </label>
+                <button type="button" className="btn" onClick={() => applyTiming(detail.id)}>
+                  Apply live
+                </button>
               </dd>
             </div>
             <div>
