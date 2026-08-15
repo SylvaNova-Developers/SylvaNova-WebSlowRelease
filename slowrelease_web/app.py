@@ -170,8 +170,11 @@ def create_app(
                 raise HTTPException(400, "time_max must be >= time_min")
         updated = db.update_slot(slot_id, **fields)
         assert updated is not None
-        # Live timing/region changes require restart to apply cleanly.
-        if any(k in fields for k in ("time_min", "time_max", "region_mode")):
+        # Live worker settings require restart to apply cleanly.
+        if any(
+            k in fields
+            for k in ("time_min", "time_max", "region_mode", "host", "port", "password", "slot_name")
+        ):
             raw = db.get_slot_raw(slot_id)
             if raw and raw["desired_state"] == "running":
                 db.append_log(slot_id, "Settings changed; restarting worker to apply.")

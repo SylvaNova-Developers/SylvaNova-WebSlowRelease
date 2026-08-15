@@ -225,6 +225,7 @@ class SlowReleaseContext(TrackerGameContext):
         except Exception:
             logger.error("Autoplayer Error", exc_info=True)
             self._emit_progress({"status": "error", "error": "Autoplayer crashed"})
+            self.exit_event.set()
 
     def disconnect(self, *args):
         if self.autoplayer_task:
@@ -265,11 +266,33 @@ async def run_headless(
         ctx.request_stop()
         await ctx.disconnect()
 
+    async def watch_fatal():
+        while not ctx.exit_event.is_set():
+            await asyncio.sleep(0.5)
+            if ctx._completed or ctx._stop_requested:
+                return
+            if ctx.slot is not None:
+                continue
+            if ctx.disconnected_intentionally:
+                ctx._emit_progress({"status": "error", "error": "Connection refused"})
+                ctx.exit_event.set()
+                return
+            task = ctx.server_task
+            if task is None or not task.done():
+                continue
+            if ctx.autoreconnect_task is not None and not ctx.autoreconnect_task.done():
+                continue
+            ctx._emit_progress({"status": "error", "error": "Connection failed"})
+            ctx.exit_event.set()
+            return
+
     stop_task = asyncio.create_task(watch_stop(), name="stop watcher")
+    fatal_task = asyncio.create_task(watch_fatal(), name="fatal watcher")
     try:
         await ctx.exit_event.wait()
     finally:
         stop_task.cancel()
+        fatal_task.cancel()
         if ctx.autoplayer_task:
             ctx.autoplayer_task.cancel()
         await ctx.shutdown()

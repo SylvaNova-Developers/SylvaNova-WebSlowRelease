@@ -133,14 +133,15 @@ class Supervisor:
                     proc.send_signal(signal.SIGTERM)
                 except ProcessLookupError:
                     pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except asyncio.TimeoutError:
             try:
-                await asyncio.wait_for(proc.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                await proc.wait()
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+        async with self._lock:
             self._workers.pop(slot_id, None)
             self.db.update_slot(slot_id, status="stopped", pid=None)
             self.db.append_log(slot_id, "Stopped by supervisor.")
