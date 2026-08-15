@@ -27,6 +27,15 @@ export const api = {
   getSlot: (id: number) => request<SlotDetail>(`/api/slots/${id}`),
   createSlot: (payload: SlotCreatePayload) =>
     request<Slot>('/api/slots', { method: 'POST', body: JSON.stringify(payload) }),
+  patchSlot: (
+    id: number,
+    payload: {
+      auto_goal_on_go_mode?: boolean
+      region_mode?: boolean
+      time_min?: number
+      time_max?: number
+    },
+  ) => request<Slot>(`/api/slots/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   startSlot: (id: number) => request<Slot>(`/api/slots/${id}/start`, { method: 'POST' }),
   stopSlot: (id: number) => request<Slot>(`/api/slots/${id}/stop`, { method: 'POST' }),
   restartSlot: (id: number) => request<Slot>(`/api/slots/${id}/restart`, { method: 'POST' }),

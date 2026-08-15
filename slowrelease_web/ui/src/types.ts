@@ -17,6 +17,7 @@ export interface Slot {
   time_min: number
   time_max: number
   region_mode: boolean
+  auto_goal_on_go_mode: boolean
   desired_state: 'running' | 'stopped'
   status: SlotStatus
   checked_count: number
@@ -58,5 +59,6 @@ export interface SlotCreatePayload {
   time_min: number
   time_max: number
   region_mode: boolean
+  auto_goal_on_go_mode: boolean
   start: boolean
 }

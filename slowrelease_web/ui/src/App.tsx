@@ -14,6 +14,7 @@ const emptyForm = {
   time_min: 10,
   time_max: 10,
   region_mode: true,
+  auto_goal_on_go_mode: false,
   start: true,
 }
 
@@ -39,6 +40,8 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [detail, setDetail] = useState<SlotDetail | null>(null)
   const [showForm, setShowForm] = useState(true)
+  const [editTimeMin, setEditTimeMin] = useState(10)
+  const [editTimeMax, setEditTimeMax] = useState(10)
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined)
@@ -67,6 +70,12 @@ export default function App() {
       window.clearInterval(id)
     }
   }, [selectedId, slots])
+
+  useEffect(() => {
+    if (!detail) return
+    setEditTimeMin(detail.time_min)
+    setEditTimeMax(detail.time_max)
+  }, [detail?.id, detail?.time_min, detail?.time_max])
 
   const running = useMemo(
     () => slots.filter((s) => s.desired_state === 'running' && s.status !== 'completed').length,
@@ -114,6 +123,38 @@ export default function App() {
     }
   }
 
+  async function toggleAutoGoal(id: number, enabled: boolean) {
+    setError('')
+    try {
+      const updated = await api.patchSlot(id, { auto_goal_on_go_mode: enabled })
+      setSlots(await api.listSlots())
+      if (selectedId === id) {
+        setDetail((prev) => (prev ? { ...prev, ...updated, logs: prev.logs } : prev))
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function applyTiming(id: number) {
+    setError('')
+    const timeMin = Number(editTimeMin)
+    const timeMax = Number(editTimeMax)
+    if (!(timeMin > 0) || !(timeMax > 0) || timeMax < timeMin) {
+      setError('Time max must be >= time min, and both must be > 0.')
+      return
+    }
+    try {
+      const updated = await api.patchSlot(id, { time_min: timeMin, time_max: timeMax })
+      setSlots(await api.listSlots())
+      if (selectedId === id) {
+        setDetail((prev) => (prev ? { ...prev, ...updated, logs: prev.logs } : prev))
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   function onYamlFile(file: File | null) {
     if (!file) return
     file.text().then((text) => {
@@ -129,8 +170,8 @@ export default function App() {
     <div className="page">
       <header className="hero">
         <div className="hero-copy">
-          <p className="eyebrow">Archipelago companion</p>
-          <h1>Slow Release</h1>
+          <p className="eyebrow">Hey There, this is the...</p>
+          <h1>Slow Release Webclient</h1>
           <p className="lede">
             Feed a player YAML and room details. Workers keep releasing checks until the slot is done.
           </p>
@@ -148,11 +189,6 @@ export default function App() {
               Universal Tracker missing: {health.tracker_error || 'install the UT apworld to run workers.'}
             </p>
           )}
-        </div>
-        <div className="hero-visual" aria-hidden="true">
-          <div className="orb orb-a" />
-          <div className="orb orb-b" />
-          <div className="pulse-ring" />
         </div>
       </header>
 
@@ -242,6 +278,14 @@ export default function App() {
             <label className="check">
               <input
                 type="checkbox"
+                checked={form.auto_goal_on_go_mode}
+                onChange={(e) => setForm({ ...form, auto_goal_on_go_mode: e.target.checked })}
+              />
+              Auto-goal in go mode
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
                 checked={form.start}
                 onChange={(e) => setForm({ ...form, start: e.target.checked })}
               />
@@ -316,6 +360,14 @@ export default function App() {
                   <button type="button" className="btn" onClick={() => act(slot.id, 'restart')}>
                     Restart
                   </button>
+                  <button
+                    type="button"
+                    className={`btn ${slot.auto_goal_on_go_mode ? 'primary' : ''}`}
+                    title="Send CLIENT_GOAL when Universal Tracker reports go mode"
+                    onClick={() => toggleAutoGoal(slot.id, !slot.auto_goal_on_go_mode)}
+                  >
+                    {slot.auto_goal_on_go_mode ? 'Auto-goal on' : 'Auto-goal off'}
+                  </button>
                   <button type="button" className="btn danger" onClick={() => act(slot.id, 'delete')}>
                     Delete
                   </button>
@@ -343,8 +395,43 @@ export default function App() {
             </div>
             <div>
               <dt>Timing</dt>
+              <dd className="timing-edit">
+                <label>
+                  Min
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    value={editTimeMin}
+                    onChange={(e) => setEditTimeMin(Number(e.target.value))}
+                  />
+                </label>
+                <label>
+                  Max
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    value={editTimeMax}
+                    onChange={(e) => setEditTimeMax(Number(e.target.value))}
+                  />
+                </label>
+                <button type="button" className="btn" onClick={() => applyTiming(detail.id)}>
+                  Apply live
+                </button>
+              </dd>
+            </div>
+            <div>
+              <dt>Auto-goal</dt>
               <dd>
-                {detail.time_min}–{detail.time_max}s · region {detail.region_mode ? 'on' : 'off'}
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={detail.auto_goal_on_go_mode}
+                    onChange={(e) => toggleAutoGoal(detail.id, e.target.checked)}
+                  />
+                  Goal when UT reports go mode
+                </label>
               </dd>
             </div>
             <div>
@@ -360,6 +447,10 @@ export default function App() {
           <pre className="logs">{detail.logs.length ? detail.logs.join('\n') : 'No log lines yet.'}</pre>
         </aside>
       )}
+
+      <footer className="site-footer">
+        <p>© {new Date().getFullYear()} SylvaNova LLC. All rights reserved.</p>
+      </footer>
     </div>
   )
 }

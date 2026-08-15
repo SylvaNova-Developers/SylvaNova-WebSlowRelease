@@ -56,6 +56,7 @@ def main() -> None:
                     "time_min": 5,
                     "time_max": 5,
                     "region_mode": True,
+                    "auto_goal_on_go_mode": True,
                     "start": False,
                 },
             )
@@ -63,6 +64,7 @@ def main() -> None:
             slot = created.json()
             slot_id = slot["id"]
             assert slot["status"] == "stopped"
+            assert slot["auto_goal_on_go_mode"] is True
             print("created slot", slot_id)
 
             listed = client.get("/api/slots")
@@ -75,10 +77,11 @@ def main() -> None:
 
             patched = client.patch(
                 f"/api/slots/{slot_id}",
-                json={"time_min": 8, "time_max": 12},
+                json={"time_min": 8, "time_max": 12, "auto_goal_on_go_mode": False},
             )
             assert patched.status_code == 200, patched.text
             assert patched.json()["time_min"] == 8
+            assert patched.json()["auto_goal_on_go_mode"] is False
             print("patched ok")
 
             assert body.get("tracker_available"), "Universal Tracker should be bundled under worlds/tracker"

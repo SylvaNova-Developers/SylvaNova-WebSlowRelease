@@ -24,6 +24,11 @@ class SlowReleaseCommandProcessor(TrackerCommandProcessor):
         self.ctx.region_mode = not self.ctx.region_mode
         logger.info(f"Set region mode to {self.ctx.region_mode}")
 
+    def _cmd_auto_goal(self):
+        """Toggle auto-goal when Universal Tracker reports go mode (completion reachable)."""
+        self.ctx.auto_goal_on_go_mode = not self.ctx.auto_goal_on_go_mode
+        logger.info(f"Set auto-goal on go mode to {self.ctx.auto_goal_on_go_mode}")
+
 
 class SlowReleaseContext(TrackerGameContext):
     time_per_min = 10
@@ -32,6 +37,7 @@ class SlowReleaseContext(TrackerGameContext):
     game = ""
     has_game = False
     region_mode = True
+    auto_goal_on_go_mode = False
     command_processor = SlowReleaseCommandProcessor
     autoplayer_task = None
     progress_callback: ProgressCallback | None = None
@@ -40,10 +46,39 @@ class SlowReleaseContext(TrackerGameContext):
     _in_bk: bool = False
     _current_location_name: str = ""
     _current_region_name: str = ""
+    _logic_wakeup: asyncio.Event | None = None
 
     def autoplayer_log(self, message):
         logger.info(message)
         self._emit_progress({"log": message})
+
+    def _ensure_logic_wakeup(self) -> asyncio.Event:
+        if self._logic_wakeup is None:
+            self._logic_wakeup = asyncio.Event()
+        return self._logic_wakeup
+
+    def _wake_logic(self) -> None:
+        if self._logic_wakeup is not None:
+            self._logic_wakeup.set()
+
+    def _available_count(self) -> int:
+        if getattr(self, "tracker_core", None) is None:
+            return 0
+        try:
+            return len(self.tracker_core.locations_available)
+        except Exception:
+            return 0
+
+    def _leave_bk(self, available: int | None = None) -> None:
+        """Clear sticky BK as soon as Universal Tracker reports in-logic checks."""
+        if not self._in_bk:
+            return
+        count = self._available_count() if available is None else available
+        if count <= 0:
+            return
+        self._in_bk = False
+        self.autoplayer_log(f"Out of BK ({count} in logic).")
+        self._emit_progress({"status": "running"})
 
     def set_time(self, time_min=None, time_max=None):
         if time_min:
@@ -66,14 +101,12 @@ class SlowReleaseContext(TrackerGameContext):
         checked = len(self.checked_locations)
         missing = len(self.missing_locations)
         total = checked + missing
-        available = 0
-        if getattr(self, "tracker_core", None) is not None:
-            try:
-                available = len(self.tracker_core.locations_available)
-            except Exception:
-                available = 0
+        available = self._available_count()
+        # Never publish sticky BK once UT says checks are in logic again.
+        if available > 0 and self._in_bk:
+            self._in_bk = False
         payload = {
-            "status": self._status_label(),
+            "status": self._status_label(available),
             "checked_count": checked,
             "total_count": total,
             "available_count": available,
@@ -84,28 +117,35 @@ class SlowReleaseContext(TrackerGameContext):
         }
         if extra:
             payload.update(extra)
+            # Extra status=bk is stale if checks are already in logic.
+            if payload.get("status") == "bk" and available > 0:
+                payload["status"] = "running"
         result = self.progress_callback(payload)
         if asyncio.iscoroutine(result):
             asyncio.create_task(result)
 
-    def _status_label(self) -> str:
+    def _status_label(self, available: int | None = None) -> str:
         if self._completed:
             return "completed"
         if self._stop_requested:
             return "stopped"
         if not (self.server and self.server.socket and not self.server.socket.closed):
             return "connecting"
+        avail = self._available_count() if available is None else available
+        if avail > 0:
+            self._in_bk = False
+            return "running"
         if self._in_bk:
             return "bk"
         return "running"
 
-    async def _mark_completed(self):
+    async def _mark_completed(self, reason: str | None = None):
         if self._completed:
             return
         self._completed = True
         self.finished_game = True
         self._current_location_name = ""
-        self.autoplayer_log("Slow release complete: all locations checked.")
+        self.autoplayer_log(reason or "Slow release complete: all locations checked.")
         try:
             await self.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
         except Exception:
@@ -113,11 +153,42 @@ class SlowReleaseContext(TrackerGameContext):
         self._emit_progress({"status": "completed", "completed": True})
         self.exit_event.set()
 
+    def _is_in_go_mode(self, tracker_state=None) -> bool:
+        """True when Universal Tracker says completion is reachable (logical go mode)."""
+        if not getattr(self, "tracker_core", None):
+            return False
+        if not self.tracker_core.multiworld or not self.tracker_core.player_id:
+            return False
+        if tracker_state is None:
+            try:
+                tracker_state = self.updateTracker()
+            except Exception:
+                logger.exception("Failed to refresh Universal Tracker for go-mode check")
+                return False
+        if tracker_state is None or tracker_state.state is None:
+            return False
+        return bool(
+            self.tracker_core.multiworld.has_beaten_game(
+                tracker_state.state,
+                self.tracker_core.player_id,
+            )
+        )
+
     async def autoplayer(self):
         print("Autoplayer")
         self._in_bk = False
+        waited = 0
         while not self.tracker_core.player_id:
             if self._stop_requested:
+                return
+            waited += 1
+            if waited > 30:
+                msg = (
+                    "Universal Tracker did not become ready within 30s. "
+                    "Is the game world installed and generating correctly?"
+                )
+                self.autoplayer_log(msg)
+                self._emit_progress({"status": "error", "error": msg})
                 return
             await asyncio.sleep(1)
         world: World = self.tracker_core.multiworld.worlds[self.tracker_core.player_id]
@@ -126,14 +197,27 @@ class SlowReleaseContext(TrackerGameContext):
         )
         self._current_region_name = current_region.name
         self._emit_progress({"status": "running"})
+        wakeup = self._ensure_logic_wakeup()
         while not self._stop_requested and not self._completed:
             if self.missing_locations is not None and len(self.missing_locations) == 0 and (
                 self.checked_locations or self.server_locations
             ):
                 await self._mark_completed()
                 return
+            # ReceivedItems (e.g. progression from other slots) does not trigger
+            # TrackerGameContext.on_package refresh. Recompute in-logic locations
+            # each tick so BK can clear when items arrive.
+            try:
+                tracker_state = self.updateTracker()
+            except Exception:
+                logger.exception("Universal Tracker refresh failed")
+                await asyncio.sleep(1)
+                continue
+            if self.auto_goal_on_go_mode and self._is_in_go_mode(tracker_state):
+                await self._mark_completed("Go mode detected; sending goal.")
+                return
             if len(self.tracker_core.locations_available) > 0:
-                self._in_bk = False
+                self._leave_bk(len(self.tracker_core.locations_available))
                 goal_location = None
                 visited_regions = []
                 regions = [
@@ -186,13 +270,19 @@ class SlowReleaseContext(TrackerGameContext):
                 self._emit_progress()
                 await asyncio.sleep(0.1)
             else:
-                if self._in_bk:
-                    await asyncio.sleep(1)
-                else:
+                if not self._in_bk:
                     self.autoplayer_log("In BK.")
                     self._in_bk = True
                     self._emit_progress({"status": "bk"})
-                    await asyncio.sleep(1)
+                # Sleep until items/room updates wake us, or poll again after 1s.
+                # Only clear when wait succeeds. Clearing after a timeout can drop
+                # a wakeup that arrived between TimeoutError and clear().
+                try:
+                    await asyncio.wait_for(wakeup.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+                else:
+                    wakeup.clear()
 
     def make_gui(self):
         ui = super().make_gui()
@@ -201,16 +291,44 @@ class SlowReleaseContext(TrackerGameContext):
 
     def on_package(self, cmd, args):
         super().on_package(cmd, args)
-        if cmd == "Connected":
+        if cmd == "ReceivedItems":
+            # Parent TrackerGameContext does not refresh on ReceivedItems.
+            # Items from other slots are how slots usually leave BK.
+            try:
+                self.updateTracker()
+            except Exception:
+                logger.exception("Universal Tracker refresh failed after ReceivedItems")
+            # Leave BK immediately so UI/status cannot stay sticky while the
+            # autoplayer is still mid-wait.
+            self._leave_bk()
+            self._wake_logic()
+        elif cmd == "Connected":
             if "Tracker" in self.tags:
                 self.tags.remove("Tracker")
                 asyncio.create_task(self.send_msgs([{"cmd": "ConnectUpdate", "tags": self.tags}]))
             if self.autoplayer_task:
                 self.autoplayer_task.cancel()
+            # UT init happens in TrackerGameContext.on_package. Without a local
+            # world + successful generation, player_id never gets set and the
+            # old wait-loop looked "running" forever without releasing checks.
+            if not self.tracker_core.player_id or not self.tracker_core.multiworld:
+                game = getattr(self, "game", None) or "unknown"
+                msg = (
+                    f"Universal Tracker failed to initialize for '{game}'. "
+                    "Install that game's apworld locally so Slow Release can "
+                    "compute in-logic checks."
+                )
+                self.autoplayer_log(msg)
+                self._emit_progress({"status": "error", "error": msg})
+                return
+            self._in_bk = False
+            self._ensure_logic_wakeup()
             self._emit_progress({"status": "running"})
             self.autoplayer_task = asyncio.create_task(self.autoplayer())
             self.autoplayer_task.add_done_callback(self.autoplayer_done)
         elif cmd == "RoomUpdate":
+            self._leave_bk()
+            self._wake_logic()
             self._emit_progress()
             if self.missing_locations is not None and len(self.missing_locations) == 0 and (
                 self.checked_locations or self.server_locations
@@ -241,9 +359,11 @@ async def run_headless(
     time_min: float = 10.0,
     time_max: float | None = None,
     region_mode: bool = True,
+    auto_goal_on_go_mode: bool = False,
     progress_callback: ProgressCallback | None = None,
     stop_event: asyncio.Event | None = None,
     players_dir: str | None = None,
+    on_ready: typing.Callable[[SlowReleaseContext], None] | None = None,
 ) -> SlowReleaseContext:
     """Run Slow Release without GUI/CLI until completion, stop, or fatal error."""
     import settings
@@ -264,9 +384,12 @@ async def run_headless(
     ctx = SlowReleaseContext(connect, password)
     ctx.auth = name
     ctx.region_mode = region_mode
+    ctx.auto_goal_on_go_mode = auto_goal_on_go_mode
     ctx.progress_callback = progress_callback
     ctx.set_time(time_min, time_max)
     ctx._emit_progress({"status": "connecting"})
+    if on_ready is not None:
+        on_ready(ctx)
 
     if tracker_loaded:
         ctx.tracker_core.enforce_deferred_connections = DeferredEntranceMode.disabled
@@ -303,6 +426,7 @@ def launch(*args):
         ctx.auth = args.name
         ctx.server_task = asyncio.create_task(server_loop(ctx), name="server loop")
         ctx.set_time(args.time, args.time_max)
+        ctx.auto_goal_on_go_mode = bool(getattr(args, "auto_goal_on_go_mode", False))
 
         if tracker_loaded:
             ctx.tracker_core.enforce_deferred_connections = DeferredEntranceMode.disabled
@@ -325,6 +449,11 @@ def launch(*args):
         help="Minimum time per check in seconds. If maximum is not specified, defaults to this.",
     )
     parser.add_argument("--time_max", type=float, default=None, help="Maximum time per check.")
+    parser.add_argument(
+        "--auto-goal-on-go-mode",
+        action="store_true",
+        help="Send CLIENT_GOAL when Universal Tracker reports logical go mode.",
+    )
     parser.add_argument("url", nargs="?", help="Archipelago connection url")
     args = parser.parse_args(args)
 

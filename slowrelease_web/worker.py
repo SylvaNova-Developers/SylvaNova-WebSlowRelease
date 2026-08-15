@@ -6,6 +6,7 @@ import signal
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 # Ensure Archipelago repo root is on sys.path when launched as a subprocess.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -75,6 +76,7 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
     time_min = float(raw["time_min"])
     time_max = float(raw["time_max"])
     region_mode = bool(raw["region_mode"])
+    auto_goal_on_go_mode = bool(raw.get("auto_goal_on_go_mode", 0))
 
     # Force headless CommonClient (no Kivy) and settings (no tkinter).
     if "--nogui" not in sys.argv:
@@ -86,6 +88,11 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
     from slowrelease_web.models import utc_now_iso
     from worlds.slowrelease.Client import run_headless
 
+    ctx_holder: dict[str, Any] = {}
+
+    def _on_ready(ctx) -> None:
+        ctx_holder["ctx"] = ctx
+
     async def heartbeat_loop():
         while not stop_event.is_set():
             db.update_slot(slot_id, heartbeat_at=utc_now_iso())
@@ -94,7 +101,41 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
             except asyncio.TimeoutError:
                 continue
 
+    async def settings_sync_loop():
+        """Apply DB timing / toggles to the running client without restart."""
+        while not stop_event.is_set():
+            ctx = ctx_holder.get("ctx")
+            raw_now = db.get_slot_raw(slot_id)
+            if ctx is not None and raw_now is not None:
+                tmin = float(raw_now["time_min"])
+                tmax = float(raw_now["time_max"])
+                if tmax < tmin:
+                    tmax = tmin
+                if (ctx.time_per_min, ctx.time_per_max) != (tmin, tmax):
+                    ctx.time_per_min = tmin
+                    ctx.time_per_max = tmax
+                    db.append_log(slot_id, f"Live timing updated to {tmin:g}–{tmax:g}s")
+                auto_goal = bool(raw_now.get("auto_goal_on_go_mode", 0))
+                if ctx.auto_goal_on_go_mode != auto_goal:
+                    ctx.auto_goal_on_go_mode = auto_goal
+                    db.append_log(
+                        slot_id,
+                        f"Live auto-goal {'enabled' if auto_goal else 'disabled'}.",
+                    )
+                region = bool(raw_now["region_mode"])
+                if ctx.region_mode != region:
+                    ctx.region_mode = region
+                    db.append_log(
+                        slot_id,
+                        f"Live region mode {'enabled' if region else 'disabled'}.",
+                    )
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                continue
+
     heartbeat_task = asyncio.create_task(heartbeat_loop(), name="heartbeat")
+    settings_task = asyncio.create_task(settings_sync_loop(), name="settings-sync")
     try:
         ctx = await run_headless(
             connect=connect,
@@ -103,9 +144,11 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
             time_min=time_min,
             time_max=time_max,
             region_mode=region_mode,
+            auto_goal_on_go_mode=auto_goal_on_go_mode,
             progress_callback=writer.handle,
             stop_event=stop_event,
             players_dir=str(players_dir),
+            on_ready=_on_ready,
         )
         if ctx._completed:
             db.append_log(slot_id, "Slot completed successfully.")
@@ -123,11 +166,12 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
         raise
     finally:
         stop_event.set()
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
+        for task in (heartbeat_task, settings_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 def main(argv: list[str] | None = None) -> None:

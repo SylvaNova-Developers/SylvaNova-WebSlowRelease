@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -131,6 +132,7 @@ def create_app(
             time_min=body.time_min,
             time_max=time_max,
             region_mode=body.region_mode,
+            auto_goal_on_go_mode=body.auto_goal_on_go_mode,
             desired_state="running" if body.start else "stopped",
             status="pending" if body.start else "stopped",
         )
@@ -170,14 +172,15 @@ def create_app(
                 raise HTTPException(400, "time_max must be >= time_min")
         updated = db.update_slot(slot_id, **fields)
         assert updated is not None
-        # Live timing/region changes require restart to apply cleanly.
-        if any(k in fields for k in ("time_min", "time_max", "region_mode")):
-            raw = db.get_slot_raw(slot_id)
-            if raw and raw["desired_state"] == "running":
-                db.append_log(slot_id, "Settings changed; restarting worker to apply.")
-                await supervisor.restart_slot(slot_id)
-        else:
-            on_change()
+        # Timing / region / auto-goal are applied live by the worker settings sync.
+        # No restart required for those fields.
+        on_change()
+        if any(k in fields for k in ("time_min", "time_max")):
+            db.append_log(
+                slot_id,
+                f"Timing set to {updated.time_min:g}–{updated.time_max:g}s "
+                "(applies live within a couple seconds if running).",
+            )
         return db.get_slot(slot_id)  # type: ignore
 
     @app.post("/api/slots/{slot_id}/start", response_model=SlotOut)
@@ -243,21 +246,47 @@ def create_app(
 
     if UI_DIST.is_dir():
         assets = UI_DIST / "assets"
+        index_html = UI_DIST / "index.html"
+        _warn_mismatched_ui_dist(index_html, assets)
         if assets.is_dir():
             app.mount("/assets", StaticFiles(directory=assets), name="assets")
 
         @app.get("/")
         async def index() -> FileResponse:
-            return FileResponse(UI_DIST / "index.html")
+            return FileResponse(index_html)
 
         @app.get("/{full_path:path}")
         async def spa_fallback(full_path: str) -> FileResponse:
             candidate = UI_DIST / full_path
             if candidate.is_file():
                 return FileResponse(candidate)
-            return FileResponse(UI_DIST / "index.html")
+            return FileResponse(index_html)
 
     return app
+
+
+def _warn_mismatched_ui_dist(index_html: Path, assets: Path) -> None:
+    """Log a clear error when index.html references hashed assets that are missing.
+
+    A partial/stale Vite build leaves the SPA as a white screen (JS 404).
+    """
+    if not index_html.is_file() or not assets.is_dir():
+        return
+    try:
+        html = index_html.read_text(encoding="utf-8")
+    except OSError:
+        return
+    missing: list[str] = []
+    for match in re.finditer(r"""(?:src|href)=["'](/assets/[^"']+)["']""", html):
+        rel = match.group(1).removeprefix("/assets/")
+        if not (assets / rel).is_file():
+            missing.append(match.group(1))
+    if missing:
+        logger.error(
+            "UI dist is mismatched (white screen likely). Missing %s. "
+            "Rebuild with: cd slowrelease_web/ui && npm run build",
+            ", ".join(missing),
+        )
 
 
 async def _poll_and_broadcast(db: Database, hub: EventHub) -> None:
