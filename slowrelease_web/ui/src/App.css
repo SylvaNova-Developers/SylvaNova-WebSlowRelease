@@ -348,6 +348,20 @@
   color: #8a3224;
 }
 
+.site-footer {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+  text-align: center;
+}
+
+.site-footer p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+}
+
 @media (max-width: 820px) {
   .slot-form {
     grid-template-columns: 1fr;

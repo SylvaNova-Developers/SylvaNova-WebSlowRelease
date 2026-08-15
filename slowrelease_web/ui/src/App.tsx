@@ -355,6 +355,10 @@ export default function App() {
           <pre className="logs">{detail.logs.length ? detail.logs.join('\n') : 'No log lines yet.'}</pre>
         </aside>
       )}
+
+      <footer className="site-footer">
+        <p>© {new Date().getFullYear()} SylvaNova LLC. All rights reserved.</p>
+      </footer>
     </div>
   )
 }
