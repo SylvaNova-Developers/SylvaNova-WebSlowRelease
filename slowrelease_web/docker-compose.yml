@@ -1,0 +1,29 @@
+services:
+  slowrelease-web:
+    build:
+      context: ..
+      dockerfile: slowrelease_web/Dockerfile
+    image: ghcr.io/chouticly/sylvanova-webslowrelease:latest
+    ports:
+      - "${SLOWRELEASE_PORT:-8787}:8787"
+    environment:
+      SLOWRELEASE_HOST: "0.0.0.0"
+      SLOWRELEASE_PORT: "8787"
+      SLOWRELEASE_DB: /data/slowrelease.db
+      SLOWRELEASE_MAX_WORKERS: "${SLOWRELEASE_MAX_WORKERS:-32}"
+      SLOWRELEASE_CUSTOM_WORLDS: /data/custom_worlds
+      SKIP_REQUIREMENTS_UPDATE: "1"
+    volumes:
+      - slowrelease-data:/data
+      # Optional: drop extra .apworld files here (e.g. Jigsaw)
+      - ${SLOWRELEASE_CUSTOM_WORLDS_HOST:-./custom_worlds}:/data/custom_worlds
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  slowrelease-data:

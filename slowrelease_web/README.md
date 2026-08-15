@@ -11,14 +11,46 @@ Standalone web app that runs many [Slow Release](../worlds/slowrelease/) slots i
 - Auto-reconnect (via Archipelago CommonClient) and auto-restart on worker crash
 - Heartbeat watchdog for stuck processes
 
-## Requirements
+## Docker (recommended)
+
+```bash
+# From repo root — build locally
+./slowrelease_web/scripts/docker-build.sh
+
+# Or pull a published release image
+docker pull ghcr.io/chouticly/sylvanova-webslowrelease:0.2.0
+
+# Run
+docker run --rm -p 8787:8787 \
+  -v slowrelease-data:/data \
+  -v "$PWD/custom_worlds:/data/custom_worlds" \
+  ghcr.io/chouticly/sylvanova-webslowrelease:0.2.0
+
+# Compose
+cd slowrelease_web
+docker compose up -d
+```
+
+Open http://localhost:8787
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `SLOWRELEASE_HOST` | `0.0.0.0` (in image) | Bind address |
+| `SLOWRELEASE_PORT` | `8787` | HTTP port |
+| `SLOWRELEASE_DB` | `/data/slowrelease.db` | SQLite path |
+| `SLOWRELEASE_MAX_WORKERS` | `32` | Max concurrent worker processes |
+| `SLOWRELEASE_CUSTOM_WORLDS` | `/data/custom_worlds` | Extra `.apworld` drop folder |
+
+Published images and GitHub Releases are created from `slowrelease-v*` tags (see `.github/workflows/slowrelease-docker.yml`).
+
+## Requirements (from source)
 
 - Python 3.11–3.13 with this Archipelago tree
 - Node.js 20+ (only if you need to rebuild the UI)
 
 **Universal Tracker is bundled** under [`worlds/tracker/`](../worlds/tracker/) (vendored from [Tracker_v0.3.3](https://github.com/FarisTheAncient/Archipelago/releases/tag/Tracker_v0.3.3)). No separate apworld install is required for the web manager.
 
-## Setup
+## Setup (from source)
 
 ```bash
 # From the Archipelago repo root
@@ -28,7 +60,7 @@ pip install -r slowrelease_web/requirements.txt
 # cd slowrelease_web/ui && npm install && npm run build && cd ../..
 ```
 
-## Run
+## Run (from source)
 
 ```bash
 # Default: http://127.0.0.1:8787
