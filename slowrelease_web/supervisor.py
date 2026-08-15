@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -22,6 +23,26 @@ HEARTBEAT_STALE_SECONDS = 90
 WATCHDOG_INTERVAL = 5.0
 MAX_RESTART_BACKOFF = 60.0
 BASE_RESTART_BACKOFF = 2.0
+
+# #region agent log
+_DEBUG_LOG_PATH = "/opt/cursor/logs/debug.log"
+
+
+def _agent_log(hypothesis_id: str, location: str, message: str, data: dict | None = None) -> None:
+    try:
+        payload = {
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+            "pid": os.getpid(),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, default=str) + "\n")
+    except Exception:
+        pass
+# #endregion
 
 
 @dataclass
@@ -109,6 +130,19 @@ class Supervisor:
                 return
             self.db.update_slot(slot_id, desired_state="running")
             if slot_id in self._workers:
+                # #region agent log
+                existing = self._workers[slot_id]
+                _agent_log(
+                    "H1",
+                    "supervisor.py:start_slot",
+                    "spawn_skipped_already_running",
+                    {
+                        "slot_id": slot_id,
+                        "existing_pid": existing.process.pid,
+                        "worker_keys": list(self._workers.keys()),
+                    },
+                )
+                # #endregion
                 return
             if self.running_count >= self.max_workers:
                 self.db.update_slot(slot_id, status="pending")
@@ -128,6 +162,20 @@ class Supervisor:
                 return
             worker.stopping = True
             proc = worker.process
+            # #region agent log
+            _agent_log(
+                "H1",
+                "supervisor.py:stop_slot",
+                "stop_worker",
+                {
+                    "slot_id": slot_id,
+                    "pid": proc.pid,
+                    "returncode": proc.returncode,
+                    "clear_desired": clear_desired,
+                    "worker_keys": list(self._workers.keys()),
+                },
+            )
+            # #endregion
             if proc.returncode is None:
                 try:
                     proc.send_signal(signal.SIGTERM)
@@ -142,6 +190,14 @@ class Supervisor:
                     pass
                 await proc.wait()
             self._workers.pop(slot_id, None)
+            # #region agent log
+            _agent_log(
+                "H1",
+                "supervisor.py:stop_slot",
+                "stop_worker_done",
+                {"slot_id": slot_id, "pid": proc.pid, "worker_keys": list(self._workers.keys())},
+            )
+            # #endregion
             self.db.update_slot(slot_id, status="stopped", pid=None)
             self.db.append_log(slot_id, "Stopped by supervisor.")
             self._notify()
@@ -172,6 +228,20 @@ class Supervisor:
         ]
         self.db.update_slot(slot_id, status="connecting", last_error="")
         self.db.append_log(slot_id, "Spawning worker process…")
+        # #region agent log
+        _agent_log(
+            "H1",
+            "supervisor.py:_spawn_locked",
+            "spawn_before",
+            {
+                "slot_id": slot_id,
+                "worker_keys_before": list(self._workers.keys()),
+                "pids_before": {
+                    sid: w.process.pid for sid, w in self._workers.items()
+                },
+            },
+        )
+        # #endregion
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(REPO_ROOT),
@@ -181,6 +251,19 @@ class Supervisor:
         )
         self._workers[slot_id] = ManagedWorker(slot_id=slot_id, process=proc)
         self.db.mark_worker_pid(slot_id, proc.pid)
+        # #region agent log
+        _agent_log(
+            "H1",
+            "supervisor.py:_spawn_locked",
+            "spawn_after",
+            {
+                "slot_id": slot_id,
+                "pid": proc.pid,
+                "worker_keys": list(self._workers.keys()),
+                "pids": {sid: w.process.pid for sid, w in self._workers.items()},
+            },
+        )
+        # #endregion
         asyncio.create_task(self._drain_output(slot_id, proc), name=f"worker-out-{slot_id}")
         asyncio.create_task(self._wait_process(slot_id, proc), name=f"worker-wait-{slot_id}")
         self._notify()
@@ -206,6 +289,27 @@ class Supervisor:
         async with self._lock:
             worker = self._workers.get(slot_id)
             stopping = worker.stopping if worker else False
+            same_proc = bool(
+                self._workers.get(slot_id) and self._workers[slot_id].process is proc
+            )
+            # #region agent log
+            _agent_log(
+                "H1",
+                "supervisor.py:_wait_process",
+                "worker_exited",
+                {
+                    "slot_id": slot_id,
+                    "pid": proc.pid,
+                    "code": code,
+                    "stopping": stopping,
+                    "same_proc": same_proc,
+                    "current_pid": (
+                        self._workers[slot_id].process.pid if slot_id in self._workers else None
+                    ),
+                    "worker_keys": list(self._workers.keys()),
+                },
+            )
+            # #endregion
             if self._workers.get(slot_id) and self._workers[slot_id].process is proc:
                 self._workers.pop(slot_id, None)
             raw = self.db.get_slot_raw(slot_id)
@@ -296,6 +400,18 @@ class Supervisor:
                 worker = self._workers.get(slot_id)
                 if not worker or worker.stopping:
                     continue
+                # #region agent log
+                _agent_log(
+                    "H1",
+                    "supervisor.py:_watchdog_tick",
+                    "heartbeat_stale_kill",
+                    {
+                        "slot_id": slot_id,
+                        "pid": worker.process.pid,
+                        "worker_keys": list(self._workers.keys()),
+                    },
+                )
+                # #endregion
                 self.db.append_log(slot_id, "Heartbeat stale; killing worker for restart.")
                 worker.stopping = False  # treat as crash so wait handler restarts
                 try:

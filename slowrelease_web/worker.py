@@ -50,6 +50,33 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
     db.mark_worker_pid(slot_id, os.getpid())
     db.update_slot(slot_id, status="connecting", last_error="")
     db.append_log(slot_id, f"Worker started (pid={os.getpid()})")
+    # #region agent log
+    try:
+        import json
+        import time
+
+        with open("/opt/cursor/logs/debug.log", "a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "hypothesisId": "H1",
+                        "location": "worker.py:_run_slot",
+                        "message": "worker_main_start",
+                        "data": {
+                            "slot_id": slot_id,
+                            "slot_name": raw.get("slot_name"),
+                            "host": raw.get("host"),
+                            "port": raw.get("port"),
+                        },
+                        "timestamp": int(time.time() * 1000),
+                        "pid": os.getpid(),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
     writer = ProgressWriter(db, slot_id)
     stop_event = asyncio.Event()

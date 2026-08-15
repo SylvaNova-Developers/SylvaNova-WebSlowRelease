@@ -3,7 +3,10 @@ from worlds.AutoWorld import World
 from BaseClasses import Region
 from NetUtils import ClientStatus
 import asyncio
+import json
+import os
 import random
+import time
 import typing
 
 tracker_loaded = True
@@ -12,6 +15,26 @@ from worlds.tracker.TrackerClient import TrackerGameContext, TrackerCommandProce
 
 
 ProgressCallback = typing.Callable[[dict], typing.Awaitable[None] | None]
+
+# #region agent log
+_DEBUG_LOG_PATH = "/opt/cursor/logs/debug.log"
+
+
+def _agent_log(hypothesis_id: str, location: str, message: str, data: dict | None = None) -> None:
+    try:
+        payload = {
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+            "pid": os.getpid(),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, default=str) + "\n")
+    except Exception:
+        pass
+# #endregion
 
 
 class SlowReleaseCommandProcessor(TrackerCommandProcessor):
@@ -47,6 +70,10 @@ class SlowReleaseContext(TrackerGameContext):
     _current_location_name: str = ""
     _current_region_name: str = ""
     _logic_wakeup: asyncio.Event | None = None
+    # #region agent log
+    _dbg_last_bk_tick_ms: int = 0
+    _dbg_last_emit_key: str = ""
+    # #endregion
 
     def autoplayer_log(self, message):
         logger.info(message)
@@ -58,6 +85,20 @@ class SlowReleaseContext(TrackerGameContext):
         return self._logic_wakeup
 
     def _wake_logic(self) -> None:
+        # #region agent log
+        ev = self._logic_wakeup
+        _agent_log(
+            "H3",
+            "Client.py:_wake_logic",
+            "wake_logic",
+            {
+                "has_event": ev is not None,
+                "was_set": bool(ev is not None and ev.is_set()),
+                "in_bk": self._in_bk,
+                "auth": getattr(self, "auth", None),
+            },
+        )
+        # #endregion
         if self._logic_wakeup is not None:
             self._logic_wakeup.set()
 
@@ -100,6 +141,28 @@ class SlowReleaseContext(TrackerGameContext):
         }
         if extra:
             payload.update(extra)
+        # #region agent log
+        status = payload.get("status")
+        emit_key = f"{status}:{available}:{checked}:{self._in_bk}"
+        if emit_key != self._dbg_last_emit_key and (
+            status in ("bk", "running") or (extra and "status" in extra)
+        ):
+            self._dbg_last_emit_key = emit_key
+            _agent_log(
+                "H6",
+                "Client.py:_emit_progress",
+                "emit_progress",
+                {
+                    "auth": getattr(self, "auth", None),
+                    "status": status,
+                    "available_count": available,
+                    "checked_count": checked,
+                    "in_bk": self._in_bk,
+                    "extra_status": (extra or {}).get("status"),
+                    "items_received_len": len(getattr(self, "items_received", []) or []),
+                },
+            )
+        # #endregion
         result = self.progress_callback(payload)
         if asyncio.iscoroutine(result):
             asyncio.create_task(result)
@@ -185,15 +248,64 @@ class SlowReleaseContext(TrackerGameContext):
             # each tick so BK can clear when items arrive.
             try:
                 tracker_state = self.updateTracker()
-            except Exception:
+            except Exception as exc:
+                # #region agent log
+                _agent_log(
+                    "H5",
+                    "Client.py:autoplayer",
+                    "updateTracker_tick_exception",
+                    {
+                        "auth": getattr(self, "auth", None),
+                        "error": str(exc),
+                        "disconnected_intentionally": bool(
+                            getattr(self, "disconnected_intentionally", False)
+                        ),
+                    },
+                )
+                # #endregion
                 logger.exception("Universal Tracker refresh failed")
                 await asyncio.sleep(1)
                 continue
+            # #region agent log
+            if self._in_bk:
+                now_ms = int(time.time() * 1000)
+                avail_now = len(self.tracker_core.locations_available)
+                if avail_now > 0 or now_ms - self._dbg_last_bk_tick_ms >= 5000:
+                    self._dbg_last_bk_tick_ms = now_ms
+                    _agent_log(
+                        "H2",
+                        "Client.py:autoplayer",
+                        "tick_while_bk",
+                        {
+                            "auth": getattr(self, "auth", None),
+                            "available": avail_now,
+                            "items_received_len": len(getattr(self, "items_received", []) or []),
+                            "state_none": tracker_state is None or tracker_state.state is None,
+                            "disconnected_intentionally": bool(
+                                getattr(self, "disconnected_intentionally", False)
+                            ),
+                            "items_handling": getattr(self, "items_handling", None),
+                            "tags": list(getattr(self, "tags", []) or []),
+                        },
+                    )
+            # #endregion
             if self.auto_goal_on_go_mode and self._is_in_go_mode(tracker_state):
                 await self._mark_completed("Go mode detected; sending goal.")
                 return
             if len(self.tracker_core.locations_available) > 0:
                 if self._in_bk:
+                    # #region agent log
+                    _agent_log(
+                        "H2",
+                        "Client.py:autoplayer",
+                        "leaving_bk",
+                        {
+                            "auth": getattr(self, "auth", None),
+                            "available": len(self.tracker_core.locations_available),
+                            "items_received_len": len(getattr(self, "items_received", []) or []),
+                        },
+                    )
+                    # #endregion
                     self.autoplayer_log(
                         f"Out of BK ({len(self.tracker_core.locations_available)} in logic)."
                     )
@@ -252,13 +364,53 @@ class SlowReleaseContext(TrackerGameContext):
                 await asyncio.sleep(0.1)
             else:
                 if not self._in_bk:
+                    # #region agent log
+                    _agent_log(
+                        "H2",
+                        "Client.py:autoplayer",
+                        "entering_bk",
+                        {
+                            "auth": getattr(self, "auth", None),
+                            "available": len(self.tracker_core.locations_available),
+                            "items_received_len": len(getattr(self, "items_received", []) or []),
+                            "missing": len(self.missing_locations or []),
+                            "items_handling": getattr(self, "items_handling", None),
+                        },
+                    )
+                    # #endregion
                     self.autoplayer_log("In BK.")
                     self._in_bk = True
                     self._emit_progress({"status": "bk"})
                 # Sleep until items/room updates wake us, or poll again after 1s.
+                # #region agent log
+                was_set_before_clear = wakeup.is_set()
+                if was_set_before_clear:
+                    _agent_log(
+                        "H3",
+                        "Client.py:autoplayer",
+                        "bk_wait_clear_lost_wakeup",
+                        {
+                            "auth": getattr(self, "auth", None),
+                            "was_set_before_clear": True,
+                            "available": len(self.tracker_core.locations_available),
+                        },
+                    )
+                # #endregion
                 wakeup.clear()
                 try:
                     await asyncio.wait_for(wakeup.wait(), timeout=1.0)
+                    # #region agent log
+                    _agent_log(
+                        "H3",
+                        "Client.py:autoplayer",
+                        "bk_wait_woke",
+                        {
+                            "auth": getattr(self, "auth", None),
+                            "available": len(self.tracker_core.locations_available),
+                            "items_received_len": len(getattr(self, "items_received", []) or []),
+                        },
+                    )
+                    # #endregion
                 except asyncio.TimeoutError:
                     pass
 
@@ -272,15 +424,107 @@ class SlowReleaseContext(TrackerGameContext):
         if cmd == "ReceivedItems":
             # Parent TrackerGameContext does not refresh on ReceivedItems.
             # Items from other slots are how slots usually leave BK.
+            # #region agent log
+            items = (args or {}).get("items") or []
+            avail_before = 0
+            try:
+                avail_before = len(self.tracker_core.locations_available)
+            except Exception:
+                avail_before = -1
+            item_ids = []
+            try:
+                item_ids = [int(it[0]) if not hasattr(it, "item") else int(it.item) for it in items[:8]]
+            except Exception:
+                item_ids = []
+            _agent_log(
+                "H4",
+                "Client.py:on_package",
+                "ReceivedItems_before_update",
+                {
+                    "auth": getattr(self, "auth", None),
+                    "game": getattr(self, "game", None),
+                    "pkg_index": (args or {}).get("index"),
+                    "pkg_item_count": len(items),
+                    "items_received_len": len(getattr(self, "items_received", []) or []),
+                    "avail_before": avail_before,
+                    "items_handling": getattr(self, "items_handling", None),
+                    "tags": list(getattr(self, "tags", []) or []),
+                    "disconnected_intentionally": bool(
+                        getattr(self, "disconnected_intentionally", False)
+                    ),
+                    "in_bk": self._in_bk,
+                    "item_ids_sample": item_ids,
+                },
+            )
+            # #endregion
+            update_err = None
             try:
                 self.updateTracker()
-            except Exception:
+            except Exception as exc:
+                update_err = str(exc)
                 logger.exception("Universal Tracker refresh failed after ReceivedItems")
+            # #region agent log
+            avail_after = 0
+            try:
+                avail_after = len(self.tracker_core.locations_available)
+            except Exception:
+                avail_after = -1
+            dice_frag_count = None
+            try:
+                names = []
+                id_to_name = getattr(
+                    self.tracker_core.multiworld.worlds.get(self.tracker_core.player_id),
+                    "item_id_to_name",
+                    None,
+                ) if self.tracker_core.multiworld and self.tracker_core.player_id else None
+                if id_to_name:
+                    for ni in getattr(self, "items_received", []) or []:
+                        names.append(id_to_name.get(ni.item, str(ni.item)))
+                dice_frag_count = names.count("Dice Fragment")
+                dice_count = names.count("Dice")
+            except Exception:
+                dice_frag_count = None
+                dice_count = None
+            _agent_log(
+                "H2",
+                "Client.py:on_package",
+                "ReceivedItems_after_update",
+                {
+                    "auth": getattr(self, "auth", None),
+                    "avail_before": avail_before,
+                    "avail_after": avail_after,
+                    "avail_changed": avail_after != avail_before,
+                    "update_err": update_err,
+                    "items_received_len": len(getattr(self, "items_received", []) or []),
+                    "disconnected_intentionally": bool(
+                        getattr(self, "disconnected_intentionally", False)
+                    ),
+                    "dice_fragment_count": dice_frag_count,
+                    "dice_count": dice_count,
+                    "in_bk": self._in_bk,
+                    "wakeup_set": bool(
+                        self._logic_wakeup is not None and self._logic_wakeup.is_set()
+                    ),
+                },
+            )
+            # #endregion
             self._wake_logic()
         elif cmd == "Connected":
             if "Tracker" in self.tags:
                 self.tags.remove("Tracker")
                 asyncio.create_task(self.send_msgs([{"cmd": "ConnectUpdate", "tags": self.tags}]))
+                # #region agent log
+                _agent_log(
+                    "H4",
+                    "Client.py:on_package",
+                    "Connected_removed_Tracker_tag",
+                    {
+                        "auth": getattr(self, "auth", None),
+                        "tags_after": list(self.tags),
+                        "items_handling": getattr(self, "items_handling", None),
+                    },
+                )
+                # #endregion
             if self.autoplayer_task:
                 self.autoplayer_task.cancel()
             # UT init happens in TrackerGameContext.on_package. Without a local
