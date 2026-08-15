@@ -1,0 +1,170 @@
+name: Slow Release Web — Docker & Release
+
+on:
+  push:
+    tags:
+      - "slowrelease-v*"
+    branches:
+      - slowrelease_new
+    paths:
+      - "slowrelease_web/**"
+      - "worlds/slowrelease/**"
+      - "worlds/tracker/**"
+      - "worlds/yachtdice/**"
+      - "worlds/apquest/**"
+      - "CommonClient.py"
+      - "BaseClasses.py"
+      - "Utils.py"
+      - "settings.py"
+      - ".github/workflows/slowrelease-docker.yml"
+  pull_request:
+    paths:
+      - "slowrelease_web/**"
+      - ".github/workflows/slowrelease-docker.yml"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: chouticly/sylvanova-webslowrelease
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      image_tags: ${{ steps.meta.outputs.tags }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            V="${GITHUB_REF_NAME#slowrelease-v}"
+            V="${V#v}"
+          else
+            V="$(python3 -c "import pathlib,re; t=pathlib.Path('slowrelease_web/__init__.py').read_text(); print(re.search(r'__version__\\s*=\\s*[\"\\']([^\"\\']+)', t).group(1))")"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=$V"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/slowrelease-v') }}
+            type=raw,value=${{ steps.version.outputs.version }},enable=${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
+            type=ref,event=branch,enable=${{ github.ref_type == 'branch' }}
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./slowrelease_web/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha,scope=slowrelease-web
+          cache-to: type=gha,mode=max,scope=slowrelease-web
+          provenance: false
+
+      - name: Smoke test container
+        run: |
+          set -euo pipefail
+          TAG="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
+          docker run -d --name sr-smoke -p 8787:8787 "$TAG"
+          cleanup() { docker rm -f sr-smoke >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8787/api/health | tee /tmp/health.json; then
+              grep -q '"ok":true\|"ok": true\|"tracker_available"' /tmp/health.json
+              curl -fsS http://127.0.0.1:8787/ | grep -q 'id="root"'
+              ASSET="$(curl -fsS http://127.0.0.1:8787/ | grep -oE '/assets/[^"]+\.js' | head -n1)"
+              curl -fsS -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:8787${ASSET}" | grep -q '^200$'
+              echo "Smoke test passed for $TAG"
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs sr-smoke || true
+          exit 1
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/slowrelease-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write release notes
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          {
+            echo "## Slow Release Web Manager v${VERSION}"
+            echo
+            echo "### Docker"
+            echo
+            echo '```bash'
+            echo "docker pull ${IMAGE}:${VERSION}"
+            echo "docker pull ${IMAGE}:latest"
+            echo
+            echo "docker run --rm -p 8787:8787 \\"
+            echo "  -v slowrelease-data:/data \\"
+            echo "  -v \"\$PWD/custom_worlds:/data/custom_worlds\" \\"
+            echo "  ${IMAGE}:${VERSION}"
+            echo '```'
+            echo
+            echo "Compose:"
+            echo
+            echo '```bash'
+            echo "cd slowrelease_web"
+            echo "docker compose up -d"
+            echo '```'
+            echo
+            echo "Open http://localhost:8787"
+            echo
+            echo "### Persist"
+            echo
+            echo "- SQLite DB: \`/data/slowrelease.db\`"
+            echo "- Extra apworlds: \`/data/custom_worlds\`"
+            echo
+            echo "Do not expose this UI publicly without authentication."
+          } > /tmp/release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Slow Release Web v${{ needs.build.outputs.version }}
+          body_path: /tmp/release-notes.md
+          files: |
+            slowrelease_web/docker-compose.yml
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

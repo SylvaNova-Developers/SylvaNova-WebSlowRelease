@@ -1,19 +1,9 @@
-name: Build and Publish Docker Images
+name: Build and Publish Archipelago WebHost Images (manual)
 
+# This fork's primary published image is Slow Release Web
+# (.github/workflows/slowrelease-docker.yml). Keep the upstream WebHost
+# Docker build available on demand only.
 on:
-  push:
-    paths:
-      - "**"
-      - "!docs/**"
-      - "!deploy/**"
-      - "!setup.py"
-      - "!.gitignore"
-      - "!.github/workflows/**"
-      - ".github/workflows/docker.yml"
-    branches:
-      - "main"
-    tags:
-      - "v?[0-9]+.[0-9]+.[0-9]*"
   workflow_dispatch:
 
 env:
@@ -34,12 +24,12 @@ jobs:
       - name: Set lowercase image name
         id: image
         run: |
-          echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+          echo "name=${GITHUB_REPOSITORY,,}/webhost" >> $GITHUB_OUTPUT
 
       - name: Set package name
         id: package
         run: |
-          echo "name=$(basename ${GITHUB_REPOSITORY,,})" >> $GITHUB_OUTPUT
+          echo "name=$(basename ${GITHUB_REPOSITORY,,})-webhost" >> $GITHUB_OUTPUT
 
       - name: Extract metadata
         id: meta
@@ -47,49 +37,15 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
           tags: |
-            type=ref,event=branch,enable={{is_not_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=nightly,enable={{is_default_branch}}
-
-      - name: Compute final tags
-        id: final-tags
-        run: |
-          readarray -t tags <<< "${{ steps.meta.outputs.tags }}"
-
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            tag="${{ github.ref_name }}"
-            if [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              full_latest="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:latest"
-              # Check if latest is already in tags to avoid duplicates
-              if ! printf '%s\n' "${tags[@]}" | grep -q "^$full_latest$"; then
-                tags+=("$full_latest")
-              fi
-            fi
-          fi
-
-          # Set multiline output
-          echo "tags<<EOF" >> $GITHUB_OUTPUT
-          printf '%s\n' "${tags[@]}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            type=raw,value=manual
+            type=sha,prefix=sha-
 
   build:
     needs: prepare
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        include:
-          - platform: amd64
-            runner: ubuntu-latest
-            suffix: amd64
-            cache-scope: amd64
-          - platform: arm64
-            runner: ubuntu-24.04-arm
-            suffix: arm64
-            cache-scope: arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -104,51 +60,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute suffixed tags
-        id: tags
-        run: |
-          readarray -t tags <<< "${{ needs.prepare.outputs.tags }}"
-          suffixed=()
-          for t in "${tags[@]}"; do
-            suffixed+=("$t-${{ matrix.suffix }}")
-          done
-          echo "tags=$(IFS=','; echo "${suffixed[*]}")" >> $GITHUB_OUTPUT
-
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/${{ matrix.platform }}
+          platforms: linux/amd64
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          tags: ${{ needs.prepare.outputs.tags }}
           labels: ${{ needs.prepare.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.cache-scope }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.cache-scope }}
+          cache-from: type=gha,scope=webhost
+          cache-to: type=gha,mode=max,scope=webhost
           provenance: false
-
-  manifest:
-    needs: [prepare, build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create and push multi-arch manifest
-        run: |
-          readarray -t tag_array <<< "${{ needs.prepare.outputs.tags }}"
-
-          for tag in "${tag_array[@]}"; do
-            docker manifest create "$tag" \
-              "$tag-amd64" \
-              "$tag-arm64"
-            
-            docker manifest push "$tag"
-          done
