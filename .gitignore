@@ -37,6 +37,9 @@ setups
 build
 bundle/components.wxs
 dist
+# Keep Slow Release Web Manager UI build trackable (also see ! exceptions under dist/).
+!slowrelease_web/ui/dist
+!slowrelease_web/ui/dist/**
 /prof/
 README.html
 .vs/
