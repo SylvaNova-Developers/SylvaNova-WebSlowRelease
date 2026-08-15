@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS slots (
     time_min REAL NOT NULL DEFAULT 10,
     time_max REAL NOT NULL DEFAULT 10,
     region_mode INTEGER NOT NULL DEFAULT 1,
+    auto_goal_on_go_mode INTEGER NOT NULL DEFAULT 0,
     desired_state TEXT NOT NULL DEFAULT 'stopped',
     status TEXT NOT NULL DEFAULT 'stopped',
     checked_count INTEGER NOT NULL DEFAULT 0,
@@ -69,6 +70,14 @@ class Database:
         with self._lock:
             with self._connect() as conn:
                 conn.executescript(_SCHEMA.replace("\t", ""))
+                self._ensure_columns(conn)
+
+    def _ensure_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(slots)").fetchall()}
+        if "auto_goal_on_go_mode" not in columns:
+            conn.execute(
+                "ALTER TABLE slots ADD COLUMN auto_goal_on_go_mode INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _row_to_out(self, row: sqlite3.Row) -> SlotOut:
         total = int(row["total_count"] or 0)
@@ -84,6 +93,7 @@ class Database:
             time_min=row["time_min"],
             time_max=row["time_max"],
             region_mode=bool(row["region_mode"]),
+            auto_goal_on_go_mode=bool(row["auto_goal_on_go_mode"]),
             desired_state=row["desired_state"],
             status=row["status"],
             checked_count=checked,
@@ -131,6 +141,7 @@ class Database:
         time_min: float,
         time_max: float,
         region_mode: bool,
+        auto_goal_on_go_mode: bool = False,
         desired_state: str = "stopped",
         status: str = "stopped",
     ) -> SlotOut:
@@ -141,9 +152,9 @@ class Database:
                     """
                     INSERT INTO slots (
                         name, slot_name, host, port, password, yaml_text,
-                        time_min, time_max, region_mode, desired_state, status,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        time_min, time_max, region_mode, auto_goal_on_go_mode,
+                        desired_state, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         name,
@@ -155,6 +166,7 @@ class Database:
                         time_min,
                         time_max,
                         1 if region_mode else 0,
+                        1 if auto_goal_on_go_mode else 0,
                         desired_state,
                         status,
                         now,
@@ -179,6 +191,7 @@ class Database:
             "time_min",
             "time_max",
             "region_mode",
+            "auto_goal_on_go_mode",
             "desired_state",
             "status",
             "checked_count",
@@ -197,7 +210,7 @@ class Database:
         for key, value in fields.items():
             if key not in allowed:
                 continue
-            if key == "region_mode":
+            if key in ("region_mode", "auto_goal_on_go_mode"):
                 value = 1 if value else 0
             sets.append(f"{key} = ?")
             values.append(value)

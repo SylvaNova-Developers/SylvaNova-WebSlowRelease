@@ -75,6 +75,7 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
     time_min = float(raw["time_min"])
     time_max = float(raw["time_max"])
     region_mode = bool(raw["region_mode"])
+    auto_goal_on_go_mode = bool(raw.get("auto_goal_on_go_mode", 0))
 
     # Force headless CommonClient (no Kivy) and settings (no tkinter).
     if "--nogui" not in sys.argv:
@@ -103,6 +104,7 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
             time_min=time_min,
             time_max=time_max,
             region_mode=region_mode,
+            auto_goal_on_go_mode=auto_goal_on_go_mode,
             progress_callback=writer.handle,
             stop_event=stop_event,
             players_dir=str(players_dir),

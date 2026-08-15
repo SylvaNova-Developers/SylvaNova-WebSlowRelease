@@ -14,6 +14,7 @@ const emptyForm = {
   time_min: 10,
   time_max: 10,
   region_mode: true,
+  auto_goal_on_go_mode: false,
   start: true,
 }
 
@@ -237,6 +238,14 @@ export default function App() {
             <label className="check">
               <input
                 type="checkbox"
+                checked={form.auto_goal_on_go_mode}
+                onChange={(e) => setForm({ ...form, auto_goal_on_go_mode: e.target.checked })}
+              />
+              Auto-goal in go mode
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
                 checked={form.start}
                 onChange={(e) => setForm({ ...form, start: e.target.checked })}
               />
@@ -340,6 +349,8 @@ export default function App() {
               <dt>Timing</dt>
               <dd>
                 {detail.time_min}–{detail.time_max}s · region {detail.region_mode ? 'on' : 'off'}
+                {' · '}
+                auto-goal {detail.auto_goal_on_go_mode ? 'on' : 'off'}
               </dd>
             </div>
             <div>

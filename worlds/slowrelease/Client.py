@@ -24,6 +24,11 @@ class SlowReleaseCommandProcessor(TrackerCommandProcessor):
         self.ctx.region_mode = not self.ctx.region_mode
         logger.info(f"Set region mode to {self.ctx.region_mode}")
 
+    def _cmd_auto_goal(self):
+        """Toggle auto-goal when Universal Tracker reports go mode (completion reachable)."""
+        self.ctx.auto_goal_on_go_mode = not self.ctx.auto_goal_on_go_mode
+        logger.info(f"Set auto-goal on go mode to {self.ctx.auto_goal_on_go_mode}")
+
 
 class SlowReleaseContext(TrackerGameContext):
     time_per_min = 10
@@ -32,6 +37,7 @@ class SlowReleaseContext(TrackerGameContext):
     game = ""
     has_game = False
     region_mode = True
+    auto_goal_on_go_mode = False
     command_processor = SlowReleaseCommandProcessor
     autoplayer_task = None
     progress_callback: ProgressCallback | None = None
@@ -99,19 +105,39 @@ class SlowReleaseContext(TrackerGameContext):
             return "bk"
         return "running"
 
-    async def _mark_completed(self):
+    async def _mark_completed(self, reason: str | None = None):
         if self._completed:
             return
         self._completed = True
         self.finished_game = True
         self._current_location_name = ""
-        self.autoplayer_log("Slow release complete: all locations checked.")
+        self.autoplayer_log(reason or "Slow release complete: all locations checked.")
         try:
             await self.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
         except Exception:
             logger.exception("Failed to send CLIENT_GOAL status update")
         self._emit_progress({"status": "completed", "completed": True})
         self.exit_event.set()
+
+    def _is_in_go_mode(self) -> bool:
+        """True when Universal Tracker says completion is reachable (logical go mode)."""
+        if not getattr(self, "tracker_core", None):
+            return False
+        if not self.tracker_core.multiworld or not self.tracker_core.player_id:
+            return False
+        try:
+            tracker_state = self.updateTracker()
+        except Exception:
+            logger.exception("Failed to refresh Universal Tracker for go-mode check")
+            return False
+        if tracker_state is None or tracker_state.state is None:
+            return False
+        return bool(
+            self.tracker_core.multiworld.has_beaten_game(
+                tracker_state.state,
+                self.tracker_core.player_id,
+            )
+        )
 
     async def autoplayer(self):
         print("Autoplayer")
@@ -141,6 +167,9 @@ class SlowReleaseContext(TrackerGameContext):
                 self.checked_locations or self.server_locations
             ):
                 await self._mark_completed()
+                return
+            if self.auto_goal_on_go_mode and self._is_in_go_mode():
+                await self._mark_completed("Go mode detected; sending goal.")
                 return
             if len(self.tracker_core.locations_available) > 0:
                 self._in_bk = False
@@ -264,6 +293,7 @@ async def run_headless(
     time_min: float = 10.0,
     time_max: float | None = None,
     region_mode: bool = True,
+    auto_goal_on_go_mode: bool = False,
     progress_callback: ProgressCallback | None = None,
     stop_event: asyncio.Event | None = None,
     players_dir: str | None = None,
@@ -287,6 +317,7 @@ async def run_headless(
     ctx = SlowReleaseContext(connect, password)
     ctx.auth = name
     ctx.region_mode = region_mode
+    ctx.auto_goal_on_go_mode = auto_goal_on_go_mode
     ctx.progress_callback = progress_callback
     ctx.set_time(time_min, time_max)
     ctx._emit_progress({"status": "connecting"})
@@ -326,6 +357,7 @@ def launch(*args):
         ctx.auth = args.name
         ctx.server_task = asyncio.create_task(server_loop(ctx), name="server loop")
         ctx.set_time(args.time, args.time_max)
+        ctx.auto_goal_on_go_mode = bool(getattr(args, "auto_goal_on_go_mode", False))
 
         if tracker_loaded:
             ctx.tracker_core.enforce_deferred_connections = DeferredEntranceMode.disabled
@@ -348,6 +380,11 @@ def launch(*args):
         help="Minimum time per check in seconds. If maximum is not specified, defaults to this.",
     )
     parser.add_argument("--time_max", type=float, default=None, help="Maximum time per check.")
+    parser.add_argument(
+        "--auto-goal-on-go-mode",
+        action="store_true",
+        help="Send CLIENT_GOAL when Universal Tracker reports logical go mode.",
+    )
     parser.add_argument("url", nargs="?", help="Archipelago connection url")
     args = parser.parse_args(args)
 

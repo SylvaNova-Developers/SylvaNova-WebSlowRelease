@@ -24,6 +24,7 @@ class SlotCreate(BaseModel):
     time_min: float = Field(10.0, ge=0.1, le=3600)
     time_max: Optional[float] = Field(None, ge=0.1, le=3600)
     region_mode: bool = True
+    auto_goal_on_go_mode: bool = False
     start: bool = True
 
 
@@ -32,6 +33,7 @@ class SlotUpdate(BaseModel):
     time_min: Optional[float] = Field(None, ge=0.1, le=3600)
     time_max: Optional[float] = Field(None, ge=0.1, le=3600)
     region_mode: Optional[bool] = None
+    auto_goal_on_go_mode: Optional[bool] = None
     password: Optional[str] = None
     host: Optional[str] = None
     port: Optional[int] = Field(None, ge=1, le=65535)
@@ -48,6 +50,7 @@ class SlotOut(BaseModel):
     time_min: float
     time_max: float
     region_mode: bool
+    auto_goal_on_go_mode: bool = False
     desired_state: DesiredState
     status: SlotStatus
     checked_count: int
