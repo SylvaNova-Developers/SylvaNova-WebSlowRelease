@@ -149,11 +149,6 @@ export default function App() {
             </p>
           )}
         </div>
-        <div className="hero-visual" aria-hidden="true">
-          <div className="orb orb-a" />
-          <div className="orb orb-b" />
-          <div className="pulse-ring" />
-        </div>
       </header>
 
       {error && <div className="banner error">{error}</div>}
