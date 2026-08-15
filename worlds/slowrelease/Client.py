@@ -1,21 +1,29 @@
-
-from CommonClient import ClientCommandProcessor, CommonContext, logger, server_loop, gui_enabled, get_base_parser
+from CommonClient import logger, server_loop, gui_enabled, get_base_parser
 from worlds.AutoWorld import World
 from BaseClasses import Region
+from NetUtils import ClientStatus
 import asyncio
 import random
+import typing
+
 tracker_loaded = True
 from worlds.tracker import DeferredEntranceMode
 from worlds.tracker.TrackerClient import TrackerGameContext, TrackerCommandProcessor
+
+
+ProgressCallback = typing.Callable[[dict], typing.Awaitable[None] | None]
+
 
 class SlowReleaseCommandProcessor(TrackerCommandProcessor):
     def _cmd_time(self, time_min=None, time_max=None):
         """If no arguments are provided, show the time per check. Else, set the time per check. Value in seconds. If two numbers are provided, then set a range to be randomly decided per check."""
         self.ctx.set_time(time_min, time_max)
+
     def _cmd_region_mode(self):
         """Toggle Region mode (i.e. make the slow release client act more like a player by handling one region of the world at a time.)"""
         self.ctx.region_mode = not self.ctx.region_mode
         logger.info(f"Set region mode to {self.ctx.region_mode}")
+
 
 class SlowReleaseContext(TrackerGameContext):
     time_per_min = 10
@@ -26,8 +34,17 @@ class SlowReleaseContext(TrackerGameContext):
     region_mode = True
     command_processor = SlowReleaseCommandProcessor
     autoplayer_task = None
+    progress_callback: ProgressCallback | None = None
+    _completed: bool = False
+    _stop_requested: bool = False
+    _in_bk: bool = False
+    _current_location_name: str = ""
+    _current_region_name: str = ""
+
     def autoplayer_log(self, message):
         logger.info(message)
+        self._emit_progress({"log": message})
+
     def set_time(self, time_min=None, time_max=None):
         if time_min:
             self.time_per_min = float(time_min)
@@ -38,54 +55,150 @@ class SlowReleaseContext(TrackerGameContext):
             logger.info(f"Set time per check to {self.time_per_min}-{self.time_per_max}s")
         else:
             logger.info(f"Time per check is {self.time_per_min}-{self.time_per_max}s")
+
+    def request_stop(self):
+        self._stop_requested = True
+        self.exit_event.set()
+
+    def _emit_progress(self, extra: dict | None = None):
+        if not self.progress_callback:
+            return
+        checked = len(self.checked_locations)
+        missing = len(self.missing_locations)
+        total = checked + missing
+        available = 0
+        if getattr(self, "tracker_core", None) is not None:
+            try:
+                available = len(self.tracker_core.locations_available)
+            except Exception:
+                available = 0
+        payload = {
+            "status": self._status_label(),
+            "checked_count": checked,
+            "total_count": total,
+            "available_count": available,
+            "current_location": self._current_location_name,
+            "current_region": self._current_region_name,
+            "connected": bool(self.server and self.server.socket and not self.server.socket.closed),
+            "completed": self._completed,
+        }
+        if extra:
+            payload.update(extra)
+        result = self.progress_callback(payload)
+        if asyncio.iscoroutine(result):
+            asyncio.create_task(result)
+
+    def _status_label(self) -> str:
+        if self._completed:
+            return "completed"
+        if self._stop_requested:
+            return "stopped"
+        if not (self.server and self.server.socket and not self.server.socket.closed):
+            return "connecting"
+        if self._in_bk:
+            return "bk"
+        return "running"
+
+    async def _mark_completed(self):
+        if self._completed:
+            return
+        self._completed = True
+        self.finished_game = True
+        self._current_location_name = ""
+        self.autoplayer_log("Slow release complete: all locations checked.")
+        try:
+            await self.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
+        except Exception:
+            logger.exception("Failed to send CLIENT_GOAL status update")
+        self._emit_progress({"status": "completed", "completed": True})
+        self.exit_event.set()
+
     async def autoplayer(self):
         print("Autoplayer")
-        inbk = False
+        self._in_bk = False
         while not self.tracker_core.player_id:
+            if self._stop_requested:
+                return
             await asyncio.sleep(1)
         world: World = self.tracker_core.multiworld.worlds[self.tracker_core.player_id]
-        current_region : Region = self.tracker_core.multiworld.get_region(world.origin_region_name, self.tracker_core.player_id)
-        while True:
+        current_region: Region = self.tracker_core.multiworld.get_region(
+            world.origin_region_name, self.tracker_core.player_id
+        )
+        self._current_region_name = current_region.name
+        self._emit_progress({"status": "running"})
+        while not self._stop_requested and not self._completed:
+            if self.missing_locations is not None and len(self.missing_locations) == 0 and (
+                self.checked_locations or self.server_locations
+            ):
+                await self._mark_completed()
+                return
             if len(self.tracker_core.locations_available) > 0:
-                inbk = False
+                self._in_bk = False
                 goal_location = None
                 visited_regions = []
-                regions = [*map(lambda e: e.connected_region,self.tracker_core.multiworld.get_region(world.origin_region_name, self.tracker_core.player_id).get_exits())]
+                regions = [
+                    *map(
+                        lambda e: e.connected_region,
+                        self.tracker_core.multiworld.get_region(
+                            world.origin_region_name, self.tracker_core.player_id
+                        ).get_exits(),
+                    )
+                ]
                 if self.region_mode:
-                    while not goal_location:
+                    while not goal_location and not self._stop_requested:
                         randolocs = self.tracker_core.locations_available.copy()
                         random.shuffle(randolocs)
                         for location in randolocs:
                             location = world.get_location(world.location_id_to_name[location])
                             if location.parent_region == current_region:
                                 goal_location = location.address
-                                self.autoplayer_log(f"Going for {self.location_names.lookup_in_game(goal_location)}")
+                                self._current_location_name = self.location_names.lookup_in_game(goal_location)
+                                self._current_region_name = current_region.name
+                                self.autoplayer_log(f"Going for {self._current_location_name}")
                                 break
                         if not goal_location:
+                            if not regions:
+                                break
                             current_region = random.choice(regions)
                             if current_region not in visited_regions:
-                                regions += [*filter(lambda e: e not in regions and e not in visited_regions, map(lambda e: e.connected_region, current_region.get_exits()))]
+                                regions += [
+                                    *filter(
+                                        lambda e: e not in regions and e not in visited_regions,
+                                        map(lambda e: e.connected_region, current_region.get_exits()),
+                                    )
+                                ]
                             visited_regions.append(current_region)
                             regions.remove(current_region)
+                            self._current_region_name = current_region.name
                             self.autoplayer_log(f"Attempting to go to: {current_region.name}")
                             await asyncio.sleep(0.1)
                 else:
                     goal_location = random.choice(self.tracker_core.locations_available)
-                    self.autoplayer_log(f"Going for {self.location_names.lookup_in_game(goal_location)}")
+                    self._current_location_name = self.location_names.lookup_in_game(goal_location)
+                    self.autoplayer_log(f"Going for {self._current_location_name}")
+                if goal_location is None:
+                    await asyncio.sleep(1)
+                    continue
                 await asyncio.sleep(random.uniform(self.time_per_min, self.time_per_max))
+                if self._stop_requested:
+                    return
                 await self.check_locations([goal_location])
+                self._emit_progress()
                 await asyncio.sleep(0.1)
             else:
-                if inbk:
+                if self._in_bk:
                     await asyncio.sleep(1)
                 else:
                     self.autoplayer_log("In BK.")
-                    inbk = True
+                    self._in_bk = True
+                    self._emit_progress({"status": "bk"})
                     await asyncio.sleep(1)
+
     def make_gui(self):
         ui = super().make_gui()
         ui.base_title = "Slow Release Client"
         return ui
+
     def on_package(self, cmd, args):
         super().on_package(cmd, args)
         if cmd == "Connected":
@@ -94,21 +207,97 @@ class SlowReleaseContext(TrackerGameContext):
                 asyncio.create_task(self.send_msgs([{"cmd": "ConnectUpdate", "tags": self.tags}]))
             if self.autoplayer_task:
                 self.autoplayer_task.cancel()
+            self._emit_progress({"status": "running"})
             self.autoplayer_task = asyncio.create_task(self.autoplayer())
             self.autoplayer_task.add_done_callback(self.autoplayer_done)
+        elif cmd == "RoomUpdate":
+            self._emit_progress()
+            if self.missing_locations is not None and len(self.missing_locations) == 0 and (
+                self.checked_locations or self.server_locations
+            ):
+                asyncio.create_task(self._mark_completed())
+
     def autoplayer_done(self, autoplayer_task):
         try:
             _ = autoplayer_task.result()
-        except Exception as e:
+        except asyncio.CancelledError:
+            pass
+        except Exception:
             logger.error("Autoplayer Error", exc_info=True)
+            self._emit_progress({"status": "error", "error": "Autoplayer crashed"})
+
     def disconnect(self, *args):
         if self.autoplayer_task:
             self.autoplayer_task.cancel()
         if "Tracker" not in self.tags:
             self.tags.append("Tracker")
         return super().disconnect(*args)
-def launch(*args):
 
+
+async def run_headless(
+    connect: str,
+    name: str,
+    password: str | None = None,
+    time_min: float = 10.0,
+    time_max: float | None = None,
+    region_mode: bool = True,
+    progress_callback: ProgressCallback | None = None,
+    stop_event: asyncio.Event | None = None,
+    players_dir: str | None = None,
+) -> SlowReleaseContext:
+    """Run Slow Release without GUI/CLI until completion, stop, or fatal error."""
+    import settings
+
+    settings.no_gui = True
+    if players_dir:
+        players_path = settings.GeneratorOptions.PlayerFilesPath(players_dir)
+        settings.get_settings().generator.player_files_path = players_path
+        try:
+            from worlds.tracker import TrackerWorld
+
+            TrackerWorld.settings["player_files_path"] = (
+                TrackerWorld.settings.__class__.TrackerPlayersPath(players_dir)
+            )
+        except Exception:
+            logger.exception("Failed to set Universal Tracker player_files_path")
+
+    ctx = SlowReleaseContext(connect, password)
+    ctx.auth = name
+    ctx.region_mode = region_mode
+    ctx.progress_callback = progress_callback
+    ctx.set_time(time_min, time_max)
+    ctx._emit_progress({"status": "connecting"})
+
+    if tracker_loaded:
+        ctx.tracker_core.enforce_deferred_connections = DeferredEntranceMode.disabled
+        if players_dir:
+            ctx.tracker_core.player_folder_override = players_dir
+        # Use super_override for the Players path; do not pass override_yaml_path
+        # (that branch is for reconnect regen and requires self.game).
+        ctx.tracker_core.run_generator(None, None, players_dir)
+        ctx.use_split = getattr(ctx.tracker_core, "use_split", True)
+
+    ctx.server_task = asyncio.create_task(server_loop(ctx), name="server loop")
+
+    async def watch_stop():
+        if stop_event is None:
+            return
+        await stop_event.wait()
+        ctx.request_stop()
+        await ctx.disconnect()
+
+    stop_task = asyncio.create_task(watch_stop(), name="stop watcher")
+    try:
+        await ctx.exit_event.wait()
+    finally:
+        stop_task.cancel()
+        if ctx.autoplayer_task:
+            ctx.autoplayer_task.cancel()
+        await ctx.shutdown()
+    return ctx
+
+
+def launch(*args):
     async def main(args):
         ctx = SlowReleaseContext(args.connect, args.password)
         ctx.auth = args.name
@@ -128,15 +317,21 @@ def launch(*args):
     import colorama
 
     parser = get_base_parser(description="Slow Release Archipelago Client, for text interfacing.")
-    parser.add_argument('--name', default=None, help="Slot Name to connect as.")
-    parser.add_argument('--time', type=float, default=10.0, help="Minimum time per check in seconds. If maximum is not specified, defaults to this.")
-    parser.add_argument('--time_max', type=float, default=None, help="Maximum time per check.")
+    parser.add_argument("--name", default=None, help="Slot Name to connect as.")
+    parser.add_argument(
+        "--time",
+        type=float,
+        default=10.0,
+        help="Minimum time per check in seconds. If maximum is not specified, defaults to this.",
+    )
+    parser.add_argument("--time_max", type=float, default=None, help="Maximum time per check.")
     parser.add_argument("url", nargs="?", help="Archipelago connection url")
     args = parser.parse_args(args)
 
     # handle if text client is launched using the "archipelago://name:pass@host:port" url from webhost
     if args.url:
         import urllib
+
         url = urllib.parse.urlparse(args.url)
         if url.scheme == "archipelago":
             args.connect = url.netloc
@@ -152,4 +347,3 @@ def launch(*args):
 
     asyncio.run(main(args))
     colorama.deinit()
-

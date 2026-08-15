@@ -1,0 +1,4 @@
+Tracker_v0.3.3
+Source: https://github.com/FarisTheAncient/Archipelago/releases/download/Tracker_v0.3.3/tracker.apworld
+Vendored into worlds/tracker for Slow Release Web Manager.
+
