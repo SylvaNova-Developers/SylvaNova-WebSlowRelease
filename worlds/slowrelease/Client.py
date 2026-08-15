@@ -119,17 +119,18 @@ class SlowReleaseContext(TrackerGameContext):
         self._emit_progress({"status": "completed", "completed": True})
         self.exit_event.set()
 
-    def _is_in_go_mode(self) -> bool:
+    def _is_in_go_mode(self, tracker_state=None) -> bool:
         """True when Universal Tracker says completion is reachable (logical go mode)."""
         if not getattr(self, "tracker_core", None):
             return False
         if not self.tracker_core.multiworld or not self.tracker_core.player_id:
             return False
-        try:
-            tracker_state = self.updateTracker()
-        except Exception:
-            logger.exception("Failed to refresh Universal Tracker for go-mode check")
-            return False
+        if tracker_state is None:
+            try:
+                tracker_state = self.updateTracker()
+            except Exception:
+                logger.exception("Failed to refresh Universal Tracker for go-mode check")
+                return False
         if tracker_state is None or tracker_state.state is None:
             return False
         return bool(
@@ -168,11 +169,23 @@ class SlowReleaseContext(TrackerGameContext):
             ):
                 await self._mark_completed()
                 return
-            if self.auto_goal_on_go_mode and self._is_in_go_mode():
+            # ReceivedItems (e.g. progression from other slots) does not trigger
+            # TrackerGameContext.on_package refresh. Recompute in-logic locations
+            # each tick so BK can clear when items arrive.
+            try:
+                tracker_state = self.updateTracker()
+            except Exception:
+                logger.exception("Universal Tracker refresh failed")
+                await asyncio.sleep(1)
+                continue
+            if self.auto_goal_on_go_mode and self._is_in_go_mode(tracker_state):
                 await self._mark_completed("Go mode detected; sending goal.")
                 return
             if len(self.tracker_core.locations_available) > 0:
-                self._in_bk = False
+                if self._in_bk:
+                    self.autoplayer_log("Out of BK.")
+                    self._in_bk = False
+                    self._emit_progress({"status": "running"})
                 goal_location = None
                 visited_regions = []
                 regions = [
