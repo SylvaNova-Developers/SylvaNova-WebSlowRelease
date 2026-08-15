@@ -61,6 +61,25 @@ class SlowReleaseContext(TrackerGameContext):
         if self._logic_wakeup is not None:
             self._logic_wakeup.set()
 
+    def _available_count(self) -> int:
+        if getattr(self, "tracker_core", None) is None:
+            return 0
+        try:
+            return len(self.tracker_core.locations_available)
+        except Exception:
+            return 0
+
+    def _leave_bk(self, available: int | None = None) -> None:
+        """Clear sticky BK as soon as Universal Tracker reports in-logic checks."""
+        if not self._in_bk:
+            return
+        count = self._available_count() if available is None else available
+        if count <= 0:
+            return
+        self._in_bk = False
+        self.autoplayer_log(f"Out of BK ({count} in logic).")
+        self._emit_progress({"status": "running"})
+
     def set_time(self, time_min=None, time_max=None):
         if time_min:
             self.time_per_min = float(time_min)
@@ -82,14 +101,12 @@ class SlowReleaseContext(TrackerGameContext):
         checked = len(self.checked_locations)
         missing = len(self.missing_locations)
         total = checked + missing
-        available = 0
-        if getattr(self, "tracker_core", None) is not None:
-            try:
-                available = len(self.tracker_core.locations_available)
-            except Exception:
-                available = 0
+        available = self._available_count()
+        # Never publish sticky BK once UT says checks are in logic again.
+        if available > 0 and self._in_bk:
+            self._in_bk = False
         payload = {
-            "status": self._status_label(),
+            "status": self._status_label(available),
             "checked_count": checked,
             "total_count": total,
             "available_count": available,
@@ -100,17 +117,24 @@ class SlowReleaseContext(TrackerGameContext):
         }
         if extra:
             payload.update(extra)
+            # Extra status=bk is stale if checks are already in logic.
+            if payload.get("status") == "bk" and available > 0:
+                payload["status"] = "running"
         result = self.progress_callback(payload)
         if asyncio.iscoroutine(result):
             asyncio.create_task(result)
 
-    def _status_label(self) -> str:
+    def _status_label(self, available: int | None = None) -> str:
         if self._completed:
             return "completed"
         if self._stop_requested:
             return "stopped"
         if not (self.server and self.server.socket and not self.server.socket.closed):
             return "connecting"
+        avail = self._available_count() if available is None else available
+        if avail > 0:
+            self._in_bk = False
+            return "running"
         if self._in_bk:
             return "bk"
         return "running"
@@ -193,12 +217,7 @@ class SlowReleaseContext(TrackerGameContext):
                 await self._mark_completed("Go mode detected; sending goal.")
                 return
             if len(self.tracker_core.locations_available) > 0:
-                if self._in_bk:
-                    self.autoplayer_log(
-                        f"Out of BK ({len(self.tracker_core.locations_available)} in logic)."
-                    )
-                    self._in_bk = False
-                    self._emit_progress({"status": "running"})
+                self._leave_bk(len(self.tracker_core.locations_available))
                 goal_location = None
                 visited_regions = []
                 regions = [
@@ -256,13 +275,14 @@ class SlowReleaseContext(TrackerGameContext):
                     self._in_bk = True
                     self._emit_progress({"status": "bk"})
                 # Sleep until items/room updates wake us, or poll again after 1s.
-                # Clear AFTER wait so a wakeup.set() between updateTracker and
-                # wait is not lost (clear-before-wait raced with ReceivedItems).
+                # Only clear when wait succeeds. Clearing after a timeout can drop
+                # a wakeup that arrived between TimeoutError and clear().
                 try:
                     await asyncio.wait_for(wakeup.wait(), timeout=1.0)
                 except asyncio.TimeoutError:
                     pass
-                wakeup.clear()
+                else:
+                    wakeup.clear()
 
     def make_gui(self):
         ui = super().make_gui()
@@ -278,6 +298,9 @@ class SlowReleaseContext(TrackerGameContext):
                 self.updateTracker()
             except Exception:
                 logger.exception("Universal Tracker refresh failed after ReceivedItems")
+            # Leave BK immediately so UI/status cannot stay sticky while the
+            # autoplayer is still mid-wait.
+            self._leave_bk()
             self._wake_logic()
         elif cmd == "Connected":
             if "Tracker" in self.tags:
@@ -304,6 +327,7 @@ class SlowReleaseContext(TrackerGameContext):
             self.autoplayer_task = asyncio.create_task(self.autoplayer())
             self.autoplayer_task.add_done_callback(self.autoplayer_done)
         elif cmd == "RoomUpdate":
+            self._leave_bk()
             self._wake_logic()
             self._emit_progress()
             if self.missing_locations is not None and len(self.missing_locations) == 0 and (

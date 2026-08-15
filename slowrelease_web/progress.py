@@ -22,6 +22,11 @@ class ProgressWriter:
         status = payload.get("status")
         log = payload.get("log")
         completed = bool(payload.get("completed"))
+        available_count = payload.get("available_count")
+        # Coerce stale BK reports when UT already has in-logic checks.
+        if status == "bk" and isinstance(available_count, int) and available_count > 0:
+            status = "running"
+            payload = {**payload, "status": status}
         force = bool(log) or completed or status != self._last_status
         if not force and (now - self._last_write) < self.min_interval:
             return
@@ -33,7 +38,7 @@ class ProgressWriter:
             status=status,
             checked_count=payload.get("checked_count"),
             total_count=payload.get("total_count"),
-            available_count=payload.get("available_count"),
+            available_count=available_count,
             current_location=payload.get("current_location"),
             current_region=payload.get("current_region"),
             last_error=payload.get("error"),
