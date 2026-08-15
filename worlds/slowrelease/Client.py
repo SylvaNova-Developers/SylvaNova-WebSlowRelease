@@ -116,8 +116,18 @@ class SlowReleaseContext(TrackerGameContext):
     async def autoplayer(self):
         print("Autoplayer")
         self._in_bk = False
+        waited = 0
         while not self.tracker_core.player_id:
             if self._stop_requested:
+                return
+            waited += 1
+            if waited > 30:
+                msg = (
+                    "Universal Tracker did not become ready within 30s. "
+                    "Is the game world installed and generating correctly?"
+                )
+                self.autoplayer_log(msg)
+                self._emit_progress({"status": "error", "error": msg})
                 return
             await asyncio.sleep(1)
         world: World = self.tracker_core.multiworld.worlds[self.tracker_core.player_id]
@@ -207,6 +217,19 @@ class SlowReleaseContext(TrackerGameContext):
                 asyncio.create_task(self.send_msgs([{"cmd": "ConnectUpdate", "tags": self.tags}]))
             if self.autoplayer_task:
                 self.autoplayer_task.cancel()
+            # UT init happens in TrackerGameContext.on_package. Without a local
+            # world + successful generation, player_id never gets set and the
+            # old wait-loop looked "running" forever without releasing checks.
+            if not self.tracker_core.player_id or not self.tracker_core.multiworld:
+                game = getattr(self, "game", None) or "unknown"
+                msg = (
+                    f"Universal Tracker failed to initialize for '{game}'. "
+                    "Install that game's apworld locally so Slow Release can "
+                    "compute in-logic checks."
+                )
+                self.autoplayer_log(msg)
+                self._emit_progress({"status": "error", "error": msg})
+                return
             self._emit_progress({"status": "running"})
             self.autoplayer_task = asyncio.create_task(self.autoplayer())
             self.autoplayer_task.add_done_callback(self.autoplayer_done)
