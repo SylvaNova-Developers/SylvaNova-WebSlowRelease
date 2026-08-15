@@ -99,9 +99,10 @@ jobs:
           trap cleanup EXIT
           for _ in $(seq 1 40); do
             if curl -fsS http://127.0.0.1:8787/api/health | tee /tmp/health.json; then
-              grep -q '"ok":true\|"ok": true\|"tracker_available"' /tmp/health.json
+              grep -qE '"tracker_available":\s*true' /tmp/health.json
               curl -fsS http://127.0.0.1:8787/ | grep -q 'id="root"'
               ASSET="$(curl -fsS http://127.0.0.1:8787/ | grep -oE '/assets/[^"]+\.js' | head -n1)"
+              [ -n "$ASSET" ] || { echo "No JS asset reference in index.html"; exit 1; }
               curl -fsS -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:8787${ASSET}" | grep -q '^200$'
               echo "Smoke test passed for $TAG"
               exit 0

@@ -16,7 +16,7 @@ services:
     volumes:
       - slowrelease-data:/data
       # Optional: drop extra .apworld files here (e.g. Jigsaw)
-      - ${SLOWRELEASE_CUSTOM_WORLDS_HOST:-./custom_worlds}:/data/custom_worlds
+      - ${SLOWRELEASE_CUSTOM_WORLDS_HOST:-../custom_worlds}:/data/custom_worlds
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
