@@ -115,6 +115,19 @@ export default function App() {
     }
   }
 
+  async function toggleAutoGoal(id: number, enabled: boolean) {
+    setError('')
+    try {
+      const updated = await api.patchSlot(id, { auto_goal_on_go_mode: enabled })
+      setSlots(await api.listSlots())
+      if (selectedId === id) {
+        setDetail((prev) => (prev ? { ...prev, ...updated, logs: prev.logs } : prev))
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   function onYamlFile(file: File | null) {
     if (!file) return
     file.text().then((text) => {
@@ -320,6 +333,14 @@ export default function App() {
                   <button type="button" className="btn" onClick={() => act(slot.id, 'restart')}>
                     Restart
                   </button>
+                  <button
+                    type="button"
+                    className={`btn ${slot.auto_goal_on_go_mode ? 'primary' : ''}`}
+                    title="Send CLIENT_GOAL when Universal Tracker reports go mode"
+                    onClick={() => toggleAutoGoal(slot.id, !slot.auto_goal_on_go_mode)}
+                  >
+                    {slot.auto_goal_on_go_mode ? 'Auto-goal on' : 'Auto-goal off'}
+                  </button>
                   <button type="button" className="btn danger" onClick={() => act(slot.id, 'delete')}>
                     Delete
                   </button>
@@ -349,8 +370,19 @@ export default function App() {
               <dt>Timing</dt>
               <dd>
                 {detail.time_min}–{detail.time_max}s · region {detail.region_mode ? 'on' : 'off'}
-                {' · '}
-                auto-goal {detail.auto_goal_on_go_mode ? 'on' : 'off'}
+              </dd>
+            </div>
+            <div>
+              <dt>Auto-goal</dt>
+              <dd>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={detail.auto_goal_on_go_mode}
+                    onChange={(e) => toggleAutoGoal(detail.id, e.target.checked)}
+                  />
+                  Goal when UT reports go mode
+                </label>
               </dd>
             </div>
             <div>
