@@ -130,7 +130,7 @@ export default function App() {
       <header className="hero">
         <div className="hero-copy">
           <p className="eyebrow">Archipelago companion</p>
-          <h1>Slow Release</h1>
+          <h1>Slow Release Webclient</h1>
           <p className="lede">
             Feed a player YAML and room details. Workers keep releasing checks until the slot is done.
           </p>
