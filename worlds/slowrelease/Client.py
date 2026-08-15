@@ -46,10 +46,20 @@ class SlowReleaseContext(TrackerGameContext):
     _in_bk: bool = False
     _current_location_name: str = ""
     _current_region_name: str = ""
+    _logic_wakeup: asyncio.Event | None = None
 
     def autoplayer_log(self, message):
         logger.info(message)
         self._emit_progress({"log": message})
+
+    def _ensure_logic_wakeup(self) -> asyncio.Event:
+        if self._logic_wakeup is None:
+            self._logic_wakeup = asyncio.Event()
+        return self._logic_wakeup
+
+    def _wake_logic(self) -> None:
+        if self._logic_wakeup is not None:
+            self._logic_wakeup.set()
 
     def set_time(self, time_min=None, time_max=None):
         if time_min:
@@ -163,6 +173,7 @@ class SlowReleaseContext(TrackerGameContext):
         )
         self._current_region_name = current_region.name
         self._emit_progress({"status": "running"})
+        wakeup = self._ensure_logic_wakeup()
         while not self._stop_requested and not self._completed:
             if self.missing_locations is not None and len(self.missing_locations) == 0 and (
                 self.checked_locations or self.server_locations
@@ -183,7 +194,9 @@ class SlowReleaseContext(TrackerGameContext):
                 return
             if len(self.tracker_core.locations_available) > 0:
                 if self._in_bk:
-                    self.autoplayer_log("Out of BK.")
+                    self.autoplayer_log(
+                        f"Out of BK ({len(self.tracker_core.locations_available)} in logic)."
+                    )
                     self._in_bk = False
                     self._emit_progress({"status": "running"})
                 goal_location = None
@@ -238,13 +251,16 @@ class SlowReleaseContext(TrackerGameContext):
                 self._emit_progress()
                 await asyncio.sleep(0.1)
             else:
-                if self._in_bk:
-                    await asyncio.sleep(1)
-                else:
+                if not self._in_bk:
                     self.autoplayer_log("In BK.")
                     self._in_bk = True
                     self._emit_progress({"status": "bk"})
-                    await asyncio.sleep(1)
+                # Sleep until items/room updates wake us, or poll again after 1s.
+                wakeup.clear()
+                try:
+                    await asyncio.wait_for(wakeup.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
 
     def make_gui(self):
         ui = super().make_gui()
@@ -253,7 +269,15 @@ class SlowReleaseContext(TrackerGameContext):
 
     def on_package(self, cmd, args):
         super().on_package(cmd, args)
-        if cmd == "Connected":
+        if cmd == "ReceivedItems":
+            # Parent TrackerGameContext does not refresh on ReceivedItems.
+            # Items from other slots are how slots usually leave BK.
+            try:
+                self.updateTracker()
+            except Exception:
+                logger.exception("Universal Tracker refresh failed after ReceivedItems")
+            self._wake_logic()
+        elif cmd == "Connected":
             if "Tracker" in self.tags:
                 self.tags.remove("Tracker")
                 asyncio.create_task(self.send_msgs([{"cmd": "ConnectUpdate", "tags": self.tags}]))
@@ -272,10 +296,13 @@ class SlowReleaseContext(TrackerGameContext):
                 self.autoplayer_log(msg)
                 self._emit_progress({"status": "error", "error": msg})
                 return
+            self._in_bk = False
+            self._ensure_logic_wakeup()
             self._emit_progress({"status": "running"})
             self.autoplayer_task = asyncio.create_task(self.autoplayer())
             self.autoplayer_task.add_done_callback(self.autoplayer_done)
         elif cmd == "RoomUpdate":
+            self._wake_logic()
             self._emit_progress()
             if self.missing_locations is not None and len(self.missing_locations) == 0 and (
                 self.checked_locations or self.server_locations
