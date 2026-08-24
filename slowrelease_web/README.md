@@ -39,7 +39,10 @@ Open http://localhost:8787
 | `SLOWRELEASE_PORT` | `8787` | HTTP port |
 | `SLOWRELEASE_DB` | `/data/slowrelease.db` | SQLite path |
 | `SLOWRELEASE_MAX_WORKERS` | `32` | Max concurrent worker processes |
-| `SLOWRELEASE_CUSTOM_WORLDS` | `/data/custom_worlds` | Extra `.apworld` drop folder |
+| `SLOWRELEASE_CUSTOM_WORLDS` | `/data/custom_worlds` | Extra `.apworld` drop folder (also where autodownloaded worlds are stored) |
+| `SLOWRELEASE_APWORLD_AUTODOWNLOAD` | `1` | Fetch missing game apworlds from the SylvaNova index (`0` to disable) |
+| `SLOWRELEASE_APWORLD_INDEX_URL` | GitHub archive of `chouticly/SylvaNova-archipelago-index` | APWM index tarball URL |
+| `SLOWRELEASE_APWORLD_INDEX_PATH` | unset | Local index checkout (tests / airgap); skips the tarball download |
 
 Published images and GitHub Releases are created from `slowrelease-v*` tags (see `.github/workflows/slowrelease-docker.yml`).
 
@@ -75,6 +78,9 @@ Environment variables:
 | `SLOWRELEASE_PORT` | `8787` | HTTP port |
 | `SLOWRELEASE_DB` | `slowrelease_web/data/slowrelease.db` | SQLite path |
 | `SLOWRELEASE_MAX_WORKERS` | `32` | Max concurrent worker processes |
+| `SLOWRELEASE_APWORLD_AUTODOWNLOAD` | `1` | Fetch missing game apworlds from the SylvaNova index (`0` to disable) |
+| `SLOWRELEASE_APWORLD_INDEX_URL` | GitHub archive of `chouticly/SylvaNova-archipelago-index` | APWM index tarball URL |
+| `SLOWRELEASE_APWORLD_INDEX_PATH` | unset | Local index checkout (tests / airgap); skips the tarball download |
 
 ## Using the UI
 
@@ -106,4 +112,5 @@ Exercises DB + HTTP CRUD without requiring a live Archipelago room (workers that
 
 - Single-user / self-hosted; no login. Do not expose publicly without a reverse proxy and access control.
 - Each worker writes YAML into an isolated temp `Players` folder for Universal Tracker generation.
+- Custom games (e.g. Keep Talking and Nobody Explodes) are autodownloaded from the [SylvaNova APWM index](https://github.com/chouticly/SylvaNova-archipelago-index) into `custom_worlds` before Universal Tracker starts. The latest index version is used. You can still drop `.apworld` files into that folder manually.
 - The classic Launcher Slow Release Client remains available unchanged.

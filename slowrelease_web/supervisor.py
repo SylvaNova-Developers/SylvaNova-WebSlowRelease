@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from .apworld_index import ensure_apworld_for_yaml
 from .db import Database, DEFAULT_DB_PATH
 from .models import utc_now_iso
 from .progress import check_tracker_available
@@ -115,6 +116,19 @@ class Supervisor:
                 self.db.append_log(slot_id, "Queued: max concurrent workers reached.")
                 self._notify()
                 return
+        if not await self._ensure_apworld(slot_id):
+            return
+        async with self._lock:
+            raw = self.db.get_slot_raw(slot_id)
+            if raw is None or raw["desired_state"] != "running":
+                return
+            if slot_id in self._workers:
+                return
+            if self.running_count >= self.max_workers:
+                self.db.update_slot(slot_id, status="pending")
+                self.db.append_log(slot_id, "Queued: max concurrent workers reached.")
+                self._notify()
+                return
             await self._spawn_locked(slot_id)
 
     async def stop_slot(self, slot_id: int, clear_desired: bool = True) -> None:
@@ -153,6 +167,30 @@ class Supervisor:
         count = self.db.increment_restart(slot_id)
         self.db.append_log(slot_id, f"Manual restart requested (restart_count={count}).")
         await self.start_slot(slot_id)
+
+    async def _ensure_apworld(self, slot_id: int) -> bool:
+        raw = self.db.get_slot_raw(slot_id)
+        if raw is None:
+            return False
+        result = await ensure_apworld_for_yaml(
+            raw["yaml_text"],
+            log=lambda message: self.db.append_log(slot_id, message),
+        )
+        if result.ok:
+            if result.outcome == "downloaded":
+                self.db.append_log(slot_id, result.message)
+                self._notify()
+            return True
+        self.db.update_slot(
+            slot_id,
+            desired_state="stopped",
+            status="error",
+            last_error=result.message,
+            pid=None,
+        )
+        self.db.append_log(slot_id, result.message)
+        self._notify()
+        return False
 
     async def _spawn_locked(self, slot_id: int) -> None:
         env = os.environ.copy()
@@ -212,6 +250,21 @@ class Supervisor:
             if raw is None:
                 return
             if stopping or self._stopped:
+                return
+            if code == 4:
+                # Worker failed to autodownload an apworld; do not loop.
+                if not raw.get("last_error"):
+                    self.db.update_slot(
+                        slot_id,
+                        status="error",
+                        pid=None,
+                        desired_state="stopped",
+                        last_error="Worker failed to autodownload the game apworld.",
+                    )
+                else:
+                    self.db.update_slot(slot_id, status="error", pid=None, desired_state="stopped")
+                self._notify()
+                await self._start_pending_locked()
                 return
             if raw["status"] == "completed" or raw["desired_state"] != "running":
                 self.db.update_slot(slot_id, pid=None)
