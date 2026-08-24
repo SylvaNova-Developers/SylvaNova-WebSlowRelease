@@ -15,7 +15,7 @@ git push origin "slowrelease-v0.2.0"
 ```
 
 5. GitHub Actions (`.github/workflows/slowrelease-docker.yml`) will:
-   - Build and push `ghcr.io/chouticly/sylvanova-webslowrelease:<version>` (+ `latest` on default branch builds)
+   - Build and push `ghcr.io/sylvanova-developers/sylvanova-webslowrelease:<version>` (+ `latest` on default branch builds)
    - Create a GitHub Release with run instructions and `docker-compose.yml`
 
 ## Local verify

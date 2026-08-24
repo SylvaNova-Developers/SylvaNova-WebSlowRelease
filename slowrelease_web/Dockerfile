@@ -16,7 +16,7 @@ FROM python:3.12-slim-bookworm AS runtime
 ARG VERSION=0.2.0
 LABEL org.opencontainers.image.title="Slow Release Web Manager" \
 	org.opencontainers.image.description="Multi-slot Slow Release workers with web UI" \
-	org.opencontainers.image.source="https://github.com/chouticly/SylvaNova-WebSlowRelease" \
+	org.opencontainers.image.source="https://github.com/SylvaNova-Developers/SylvaNova-WebSlowRelease" \
 	org.opencontainers.image.version="${VERSION}"
 
 ENV VIRTUAL_ENV=/opt/venv \
