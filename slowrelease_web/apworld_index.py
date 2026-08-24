@@ -21,10 +21,10 @@ import httpx
 logger = logging.getLogger("slowrelease_web.apworld_index")
 
 DEFAULT_INDEX_ARCHIVE_URL = (
-    "https://github.com/chouticly/SylvaNova-archipelago-index/archive/refs/heads/main.tar.gz"
+    "https://github.com/SylvaNova-Developers/SylvaNova-Archipelago-Index/archive/refs/heads/main.tar.gz"
 )
 DEFAULT_INDEX_RAW_BASE = (
-    "https://raw.githubusercontent.com/chouticly/SylvaNova-archipelago-index/main"
+    "https://raw.githubusercontent.com/SylvaNova-Developers/SylvaNova-Archipelago-Index/main"
 )
 CACHE_TTL_SECONDS = 6 * 60 * 60
 DOWNLOAD_TIMEOUT = 120.0

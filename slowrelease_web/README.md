@@ -18,13 +18,13 @@ Standalone web app that runs many [Slow Release](../worlds/slowrelease/) slots i
 ./slowrelease_web/scripts/docker-build.sh
 
 # Or pull a published release image
-docker pull ghcr.io/chouticly/sylvanova-webslowrelease:0.2.0
+docker pull ghcr.io/sylvanova-developers/sylvanova-webslowrelease:0.2.0
 
 # Run
 docker run --rm -p 8787:8787 \
   -v slowrelease-data:/data \
   -v "$PWD/custom_worlds:/data/custom_worlds" \
-  ghcr.io/chouticly/sylvanova-webslowrelease:0.2.0
+  ghcr.io/sylvanova-developers/sylvanova-webslowrelease:0.2.0
 
 # Compose
 cd slowrelease_web
@@ -41,7 +41,7 @@ Open http://localhost:8787
 | `SLOWRELEASE_MAX_WORKERS` | `32` | Max concurrent worker processes |
 | `SLOWRELEASE_CUSTOM_WORLDS` | `/data/custom_worlds` | Extra `.apworld` drop folder (also where autodownloaded worlds are stored) |
 | `SLOWRELEASE_APWORLD_AUTODOWNLOAD` | `1` | Fetch missing game apworlds from the SylvaNova index (`0` to disable) |
-| `SLOWRELEASE_APWORLD_INDEX_URL` | GitHub archive of `chouticly/SylvaNova-archipelago-index` | APWM index tarball URL |
+| `SLOWRELEASE_APWORLD_INDEX_URL` | GitHub archive of `SylvaNova-Developers/SylvaNova-Archipelago-Index` | APWM index tarball URL |
 | `SLOWRELEASE_APWORLD_INDEX_PATH` | unset | Local index checkout (tests / airgap); skips the tarball download |
 
 Published images and GitHub Releases are created from `slowrelease-v*` tags (see `.github/workflows/slowrelease-docker.yml`).
@@ -79,7 +79,7 @@ Environment variables:
 | `SLOWRELEASE_DB` | `slowrelease_web/data/slowrelease.db` | SQLite path |
 | `SLOWRELEASE_MAX_WORKERS` | `32` | Max concurrent worker processes |
 | `SLOWRELEASE_APWORLD_AUTODOWNLOAD` | `1` | Fetch missing game apworlds from the SylvaNova index (`0` to disable) |
-| `SLOWRELEASE_APWORLD_INDEX_URL` | GitHub archive of `chouticly/SylvaNova-archipelago-index` | APWM index tarball URL |
+| `SLOWRELEASE_APWORLD_INDEX_URL` | GitHub archive of `SylvaNova-Developers/SylvaNova-Archipelago-Index` | APWM index tarball URL |
 | `SLOWRELEASE_APWORLD_INDEX_PATH` | unset | Local index checkout (tests / airgap); skips the tarball download |
 
 ## Using the UI
@@ -112,5 +112,5 @@ Exercises DB + HTTP CRUD without requiring a live Archipelago room (workers that
 
 - Single-user / self-hosted; no login. Do not expose publicly without a reverse proxy and access control.
 - Each worker writes YAML into an isolated temp `Players` folder for Universal Tracker generation.
-- Custom games (e.g. Keep Talking and Nobody Explodes) are autodownloaded from the [SylvaNova APWM index](https://github.com/chouticly/SylvaNova-archipelago-index) into `custom_worlds` before Universal Tracker starts. The latest index version is used. You can still drop `.apworld` files into that folder manually.
+- Custom games (e.g. Keep Talking and Nobody Explodes) are autodownloaded from the [SylvaNova APWM index](https://github.com/SylvaNova-Developers/SylvaNova-Archipelago-Index) into `custom_worlds` before Universal Tracker starts. The latest index version is used. You can still drop `.apworld` files into that folder manually.
 - The classic Launcher Slow Release Client remains available unchanged.

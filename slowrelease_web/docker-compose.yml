@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: slowrelease_web/Dockerfile
-    image: ghcr.io/chouticly/sylvanova-webslowrelease:latest
+    image: ghcr.io/sylvanova-developers/sylvanova-webslowrelease:latest
     ports:
       - "${SLOWRELEASE_PORT:-8787}:8787"
     environment:

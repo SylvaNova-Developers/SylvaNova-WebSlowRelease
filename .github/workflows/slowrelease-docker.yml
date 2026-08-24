@@ -25,7 +25,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: chouticly/sylvanova-webslowrelease
+  IMAGE_NAME: sylvanova-developers/sylvanova-webslowrelease
 
 jobs:
   build:
