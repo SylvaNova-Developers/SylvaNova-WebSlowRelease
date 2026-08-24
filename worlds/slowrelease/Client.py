@@ -313,11 +313,20 @@ class SlowReleaseContext(TrackerGameContext):
             # old wait-loop looked "running" forever without releasing checks.
             if not self.tracker_core.player_id or not self.tracker_core.multiworld:
                 game = getattr(self, "game", None) or "unknown"
-                msg = (
-                    f"Universal Tracker failed to initialize for '{game}'. "
-                    "Install that game's apworld locally so Slow Release can "
-                    "compute in-logic checks."
-                )
+                from worlds.AutoWorld import AutoWorldRegister
+
+                if game not in AutoWorldRegister.world_types:
+                    msg = (
+                        f"Universal Tracker failed to initialize for '{game}'. "
+                        "That game's apworld is not loaded (not in the SylvaNova index, "
+                        "or autodownload failed). Install it into custom_worlds so Slow "
+                        "Release can compute in-logic checks."
+                    )
+                else:
+                    msg = (
+                        f"Universal Tracker failed to initialize for '{game}'. "
+                        "The apworld is loaded but tracker generation failed."
+                    )
                 self.autoplayer_log(msg)
                 self._emit_progress({"status": "error", "error": msg})
                 return

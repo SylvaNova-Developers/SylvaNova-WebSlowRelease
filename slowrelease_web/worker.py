@@ -69,6 +69,25 @@ async def _run_slot(slot_id: int, db_path: str) -> int:
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
+    from slowrelease_web.apworld_index import ensure_apworld_for_yaml
+
+    result = await ensure_apworld_for_yaml(
+        raw["yaml_text"],
+        log=lambda message: db.append_log(slot_id, message),
+    )
+    if not result.ok:
+        db.append_log(slot_id, result.message)
+        db.update_slot(
+            slot_id,
+            status="error",
+            last_error=result.message,
+            pid=None,
+            desired_state="stopped",
+        )
+        return 4
+    if result.outcome == "downloaded":
+        db.append_log(slot_id, result.message)
+
     players_dir = _prepare_players_dir(slot_id, raw["yaml_text"], raw["slot_name"])
     _configure_player_files_path(players_dir)
 
